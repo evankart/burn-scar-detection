@@ -60,7 +60,7 @@ def load_prediction() -> dict | None:
                     repo_id=HF_REPO,
                     repo_type="dataset",
                     filename=f"predictions/{REGION['name']}.npz",
-                    local_dir=".",
+                    local_dir="data",
                 )
             except Exception as e:
                 st.error(f"Could not download predictions: {e}")
