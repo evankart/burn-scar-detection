@@ -46,17 +46,32 @@ TRAIN_FIRES = [
 ]
 
 
+HF_REPO = "evankart/burn-scar-detection-data"
+
+
 def load_prediction() -> dict | None:
     pred_path = Path(f"data/predictions/{REGION['name']}.npz")
-    if pred_path.exists():
-        data = np.load(pred_path)
-        return {
-            "pred_mask": data["pred_mask"],
-            "true_mask": data["true_mask"],
-            "image": data["image"],
-            "bounds": data["bounds"].tolist(),
-        }
-    return None
+    if not pred_path.exists():
+        with st.spinner("Downloading predictions from HuggingFace Hub…"):
+            try:
+                from huggingface_hub import hf_hub_download
+                pred_path.parent.mkdir(parents=True, exist_ok=True)
+                hf_hub_download(
+                    repo_id=HF_REPO,
+                    repo_type="dataset",
+                    filename=f"predictions/{REGION['name']}.npz",
+                    local_dir=".",
+                )
+            except Exception as e:
+                st.error(f"Could not download predictions: {e}")
+                return None
+    data = np.load(pred_path)
+    return {
+        "pred_mask": data["pred_mask"],
+        "true_mask": data["true_mask"],
+        "image": data["image"],
+        "bounds": data["bounds"].tolist(),
+    }
 
 
 def create_map(pred_data: dict | None, overlay_opacity: float) -> folium.Map:
