@@ -1,0 +1,117 @@
+# Burn Scar Detection - Training Configuration
+
+data:
+  bands: ["B02", "B03", "B04", "B08", "B11", "B12"]
+  patch_size: 224
+  train_split: 0.9   # of train-fire patches; rest goes to val
+  num_workers: 4
+  cache_dir: "./data/cache"
+
+  # --- Demo fire (held-out, not in training set) ---
+  test_regions:
+    - name: "woolsey_fire_2018"
+      lat: 34.16
+      lon: -118.83
+      buffer_km: 20
+      pre_fire_date: "2018-10-01"
+      post_fire_date: "2018-11-20"
+
+  # --- Training fires: 10 largest CA fires with Sentinel-2 coverage ---
+  train_regions:
+    - name: "august_complex_2020"
+      lat: 40.00
+      lon: -122.60
+      buffer_km: 70
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-11-15"
+
+    - name: "mendocino_complex_2018"
+      lat: 39.25
+      lon: -122.70
+      buffer_km: 55
+      pre_fire_date: "2018-05-01"
+      post_fire_date: "2018-10-01"
+
+    - name: "scu_lightning_complex_2020"
+      lat: 37.55
+      lon: -121.45
+      buffer_km: 45
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-10-15"
+
+    - name: "caldor_fire_2021"
+      lat: 38.73
+      lon: -120.30
+      buffer_km: 20
+      pre_fire_date: "2021-07-01"
+      post_fire_date: "2021-10-01"
+
+    - name: "lnu_lightning_complex_2020"
+      lat: 38.60
+      lon: -122.20
+      buffer_km: 45
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-10-15"
+
+    - name: "north_complex_2020"
+      lat: 39.75
+      lon: -121.30
+      buffer_km: 40
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-12-15"
+
+    - name: "thomas_fire_2017"
+      lat: 34.50
+      lon: -119.10
+      buffer_km: 45
+      pre_fire_date: "2017-09-01"
+      post_fire_date: "2018-01-15"
+
+    - name: "carr_fire_2018"
+      lat: 40.65
+      lon: -122.65
+      buffer_km: 35
+      pre_fire_date: "2018-04-01"
+      post_fire_date: "2018-09-15"
+
+    - name: "dixie_fire_2021"
+      lat: 40.32
+      lon: -120.86
+      buffer_km: 40
+      pre_fire_date: "2021-06-01"
+      post_fire_date: "2021-10-15"
+
+    - name: "antelope_fire_2021"
+      lat: 40.40
+      lon: -120.20
+      buffer_km: 35
+      pre_fire_date: "2021-04-01"
+      post_fire_date: "2021-09-01"
+
+model:
+  num_classes: 2
+  in_channels: 6
+  freeze_backbone: true
+  unfreeze_after_epoch: 999
+
+training:
+  batch_size: 16
+  epochs: 8
+  learning_rate: 5.0e-4
+  backbone_lr_multiplier: 0.1
+  weight_decay: 0.01
+  warmup_epochs: 1
+  early_stopping_patience: 3
+  mixed_precision: true
+  seed: 42
+  class_weights: [0.3, 0.7]
+  augmentations:
+    random_flip: true
+    random_rotate: true
+    random_crop: true
+    color_jitter: false
+
+logging:
+  project_name: "burn-scar-detection"
+  log_every_n_steps: 10
+  metric_monitor: "val_mean_iou"

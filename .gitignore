@@ -1,0 +1,44 @@
+# Data — large files excluded, perimeters committed
+data/cache/
+data/embeddings/
+data/predictions/
+*.tif
+*.tiff
+*.nc
+
+# Models
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated outputs
+training_curves.png
+
+# Weights & Biases
+wandb/
+
+# Streamlit
+.streamlit/secrets.toml
