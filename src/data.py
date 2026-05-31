@@ -38,7 +38,12 @@ class HLSDownloader:
         self.bands = self.config["data"]["bands"]
         self.cache_dir = Path(self.config["data"]["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        earthaccess.login(strategy="netrc")
+        # Auth: environment vars (EARTHDATA_USERNAME / EARTHDATA_PASSWORD — e.g.
+        # Hugging Face Spaces secrets) first, then ~/.netrc for local use.
+        try:
+            earthaccess.login(strategy="environment")
+        except Exception:
+            earthaccess.login(strategy="netrc")
 
     def _region_bbox(self, lat: float, lon: float, buffer_km: float) -> tuple:
         buffer_deg = buffer_km * 0.009
