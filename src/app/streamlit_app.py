@@ -79,20 +79,23 @@ REGIONS = {
 DEFAULT_REGION = "woolsey_fire_2018"
 
 TRAIN_FIRES = [
-    "August Complex (2020)",
-    "Mendocino Complex (2018)",
-    "SCU Lightning Complex (2020)",
-    "Caldor (2021)",
-    "LNU Lightning Complex (2020)",
-    "North Complex (2020)",
-    "Carr (2018)",
-    "Dixie (2021)",
-    "Antelope (2021)",
-    "Holy (2018)",
-    "Bobcat (2020)",
-    "Bootleg (2021, OR)",
-    "Hermits Peak (2022, NM)",
-    "Pearl Hill (2020, WA)",
+    # NorCal / Sierra
+    "August Complex (2020)", "Mendocino Complex (2018)", "SCU Lightning Complex (2020)",
+    "Caldor (2021)", "LNU Lightning Complex (2020)", "North Complex (2020)",
+    "Carr (2018)", "Dixie (2021)", "Antelope (2021)", "Bootleg (2021, OR)",
+    "Pearl Hill (2020, WA)", "Mosquito (2022)", "Monument (2021)",
+    "River/Carmel (2020)", "Camp Fire (2018)", "Tubbs (2017)",
+    "Kincade (2019)", "Glass (2020)",
+    # SoCal chaparral (domain-matching the test fires)
+    "Bobcat (2020)", "Holy (2018)", "Apple (2020)", "Cranston (2018)",
+    "Saddleridge (2019)", "El Dorado (2020)", "Valley (2020)", "Lake (2020)",
+    "Blue Ridge (2020)", "Bond (2020)", "La Tuna (2017)",
+    # Colorado Rockies
+    "Cameron Peak (2020)", "Calwood (2020)", "Spring Creek (2018)",
+    # Arizona
+    "Bighorn (2020)", "Bush (2020)", "Telegraph (2021)",
+    # PNW
+    "Holiday Farm (2020)", "Beachie Creek (2020)",
 ]
 
 
@@ -266,7 +269,7 @@ def main():
     st.title("Wildfire Burn Scar Detection")
     st.caption(
         "Prithvi-EO-1.0-100M geospatial foundation model (IBM × NASA) "
-        "fine-tuned on 12 wildfires across 4 US states, evaluated on 3 held-out fires."
+        "fine-tuned on 37 wildfires across 5 US states, evaluated on 3 held-out fires."
     )
 
     overlay_opacity = 0.6
@@ -314,7 +317,7 @@ def main():
 
             st.subheader("Results")
             st.caption(
-                f"The model was trained on 12 wildfires across 4 US states and has "
+                f"The model was trained on 37 wildfires across 5 US states and has "
                 f"never seen the {region['display_name']}. These numbers reflect how "
                 f"well it generalises to unseen terrain."
             )
@@ -438,7 +441,7 @@ def main():
 
         #### Train / test split
 
-        Trained on 12 wildfires across 4 US states (CA, OR, NM, WA):
+        Trained on 37 wildfires across 5 US states (CA, OR, AZ, NM, WA):
         {", ".join(TRAIN_FIRES)}.
 
         Three fires are held out entirely for evaluation: Woolsey (2018, CA chaparral),
@@ -448,6 +451,17 @@ def main():
         Full scenes are sliced into 224×224 px patches (75% overlap). Patches with at least 1%
         burned pixels are always kept; background-only patches are sampled at 60% to reduce class
         imbalance.
+
+        #### Brightness correction
+
+        HLS surface reflectance (LaSRC atmospheric correction + BRDF normalization) runs
+        ~1.4–1.9× darker than the HLS distribution Prithvi-EO was pretrained on. Fed to the
+        frozen encoder, this dark input biases features toward the low-NIR burn signature and
+        floods burn predictions. A fixed per-band **brightness gain** — calibrated so the pooled
+        training-fire median reflectance matches the Prithvi pretraining mean — corrects this
+        before z-scoring. This lifted Woolsey IoU from 0.53 → 0.73 and macro IoU from 0.54 → 0.64.
+        A deterministic **NDWI water mask** (green > NIR) removes spurious burn predictions over
+        open water. Both corrections use only training-fire statistics — no test-fire leakage.
         """)
 
 
