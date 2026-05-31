@@ -1,5 +1,8 @@
 """
-Sentinel-2 data pipeline: download, preprocessing, and PyTorch dataset.
+HLS data pipeline: download, preprocessing, and PyTorch dataset.
+
+Uses NASA Earthdata's Harmonized Landsat Sentinel-2 (HLS) product — the same
+data Prithvi-EO was pretrained on.
 """
 
 import logging
@@ -7,28 +10,26 @@ import platform
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import earthaccess
 import numpy as np
-import planetary_computer as pc
 import rioxarray  # noqa: F401 — activates rio accessor on xarray
 import torch
 import xarray as xr
 import yaml
-from pystac_client import Client
 from shapely.geometry import box, mapping
 from torch.utils.data import Dataset, DataLoader
 
 logger = logging.getLogger(__name__)
 
-PLANETARY_COMPUTER_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
-SENTINEL_2_COLLECTION = "sentinel-2-l2a"
+HLS_COLLECTION = "HLSS30.v2.0"
 
 
 # ---------------------------------------------------------------------------
 # Download
 # ---------------------------------------------------------------------------
 
-class SentinelDownloader:
-    """Downloads and caches Sentinel-2 L2A imagery from Planetary Computer."""
+class HLSDownloader:
+    """Downloads and caches HLS imagery from NASA Earthdata."""
 
     def __init__(self, config_path: str = "configs/train_config.yaml"):
         with open(config_path) as f:
@@ -37,36 +38,50 @@ class SentinelDownloader:
         self.bands = self.config["data"]["bands"]
         self.cache_dir = Path(self.config["data"]["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.catalog = Client.open(PLANETARY_COMPUTER_URL)
+        earthaccess.login(strategy="netrc")
 
     def _region_bbox(self, lat: float, lon: float, buffer_km: float) -> tuple:
         buffer_deg = buffer_km * 0.009
         return (lon - buffer_deg, lat - buffer_deg, lon + buffer_deg, lat + buffer_deg)
 
     def search_scenes(self, bbox: tuple, date_range: str, max_cloud_cover: int = 15) -> list:
-        search = self.catalog.search(
-            collections=[SENTINEL_2_COLLECTION],
-            bbox=bbox,
-            datetime=date_range,
-            query={"eo:cloud_cover": {"lt": max_cloud_cover}},
-            sortby=[{"field": "eo:cloud_cover", "direction": "asc"}],
-            max_items=15,
+        results = earthaccess.search_data(
+            short_name="HLSS30",
+            bounding_box=bbox,
+            temporal=tuple(date_range.split("/")),
+            cloud_cover=(0, max_cloud_cover),
+            count=15,
         )
-        items = list(search.items())
-        logger.info(f"Found {len(items)} scenes for bbox={bbox}, dates={date_range}")
-        return items
+        results.sort(key=lambda g: g.get("umm", {}).get("CloudCover", 100))
+        logger.info(f"Found {len(results)} HLS scenes for bbox={bbox}, dates={date_range}")
+        return results
 
-    def load_scene(self, item, bbox: tuple) -> xr.Dataset:
-        signed_item = pc.sign(item)
+    def _get_mgrs_tile(self, granule) -> str:
+        """Extract MGRS tile ID from HLS granule native-id.
+        Format: HLS.S30.T11SLT.2018327T184709.v2.0 → 11SLT
+        """
+        native_id = granule.get("meta", {}).get("native-id", "")
+        parts = native_id.split(".")
+        for part in parts:
+            if len(part) == 6 and part[0] == "T" and part[1:3].isdigit():
+                return part[1:]
+        return ""
+
+    def load_scene(self, granule, bbox: tuple) -> xr.Dataset:
         band_arrays = {}
+        files = earthaccess.open([granule])
 
         for band in self.bands:
-            asset = signed_item.assets[band]
-            da = rioxarray.open_rasterio(asset.href, chunks={"x": 512, "y": 512})
+            matched = [f for f in files if f.path.endswith(f".{band}.tif")]
+            if not matched:
+                raise ValueError(f"Band {band} not found in granule assets")
+
+            # mask_and_scale: apply HLS scale_factor (0.0001) and decode the
+            # -9999 fill to NaN, yielding float surface reflectance. normalize_bands
+            # and the merge step both require float+NaN, not raw int16 DN.
+            da = rioxarray.open_rasterio(matched[0], chunks={"x": 512, "y": 512}, mask_and_scale=True)
             geom = box(*bbox)
             da = da.rio.clip([mapping(geom)], crs="EPSG:4326")
-            if band in ("B11", "B12"):
-                da = da.rio.reproject(da.rio.crs, resolution=10, resampling=1)
             band_arrays[band] = da.squeeze("band", drop=True)
 
         ref_band = band_arrays[self.bands[0]]
@@ -75,15 +90,14 @@ class SentinelDownloader:
                 band_arrays[band_name] = da.rio.reproject_match(ref_band)
 
         ds = xr.Dataset(band_arrays)
-        ds.load()  # force dask computation now so I/O errors surface inside try/except callers
+        ds.load()
         return ds
 
-    def _make_target_grid(self, bbox: tuple, resolution: float = 10.0) -> xr.DataArray:
+    def _make_target_grid(self, bbox: tuple, resolution: float = 30.0) -> xr.DataArray:
         """
         Build a reference DataArray covering the full bbox in the local UTM zone.
         All scenes are reprojected to this grid so cross-tile mosaics are always
-        the right size — the output grid is derived from the bbox, not from
-        whichever scene happens to load first.
+        the right size.
         """
         from pyproj import Transformer
 
@@ -108,72 +122,69 @@ class SentinelDownloader:
         )
         return ref.rio.write_crs(utm_epsg)
 
-    def load_and_merge_scenes(self, items: list, bbox: tuple, max_scenes: int = 10) -> xr.Dataset:
+    def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10) -> xr.Dataset:
         """
-        Load up to max_scenes and mosaic them onto a fixed output grid defined by
-        the bbox (not by the first scene's extent).  This handles cross-MGRS-tile
-        mosaics correctly: scenes from adjacent tiles (e.g. T10SFJ + T10TFK) are
-        each reprojected to the same UTM grid before merging, so the output always
-        covers the full requested area.  Scenes are processed one at a time to
-        avoid OOM on large AOIs.
+        Mosaic up to max_scenes onto a fixed UTM grid spanning the full bbox.
+
+        Uses rioxarray.merge, which places every scene at its true geographic
+        position, so scenes from different MGRS tiles tile together correctly.
+        Granules arrive sorted least-cloudy-first; merge keeps the first valid
+        pixel and fills nodata gaps from later scenes. This replaces a per-scene
+        reproject_match + manual gap-fill that stretched a single clipped tile
+        across the whole grid and short-circuited on the first scene, leaving
+        multi-tile bboxes (e.g. fires at a 4-tile junction) mostly nodata.
         """
         import gc
+        from rioxarray.merge import merge_arrays
 
         ref_da = self._make_target_grid(bbox)
+        target_crs = ref_da.rio.crs
+        bounds = ref_da.rio.bounds()
 
-        merged = None
-        for item in items[:max_scenes]:
+        per_band: dict[str, list] = {b: [] for b in self.bands}
+        loaded = 0
+        for granule in granules[:max_scenes]:
+            granule_id = granule.get("meta", {}).get("native-id", "unknown")
             try:
-                ds = self.load_scene(item, bbox)
+                ds = self.load_scene(granule, bbox)
             except Exception as e:
-                logger.warning(f"Skipping scene {item.id}: {e}")
+                logger.warning(f"Skipping scene {granule_id}: {e}")
                 continue
-
-            # Reproject onto the fixed target grid regardless of source tile
-            try:
-                ds = ds.rio.reproject_match(ref_da)
-                ds.load()
-            except Exception as e:
-                logger.warning(f"Skipping scene {item.id} during reproject: {e}")
-                del ds
-                gc.collect()
-                continue
-
-            if merged is None:
-                merged = ds
-                valid_pct = (~((merged[self.bands[0]].values == 0) |
-                               np.isnan(merged[self.bands[0]].values))).mean() * 100
-                logger.info(f"First scene {item.id}: {valid_pct:.1f}% valid pixels")
-                if valid_pct > 90:
-                    break
-                continue
-
-            # Fill zero/NaN pixels in the merged dataset, then free the fill scene
             for band in self.bands:
-                base = merged[band].values
-                fill = ds[band].values
-                nodata = (base == 0) | np.isnan(base)
-                if nodata.any():
-                    base[nodata] = fill[nodata]
-                    merged[band].values[:] = base
-
+                da = ds[band].rio.write_nodata(np.nan)
+                if da.rio.crs is not None and da.rio.crs != target_crs:
+                    da = da.rio.reproject(target_crs)
+                per_band[band].append(da)
+            loaded += 1
             del ds
             gc.collect()
 
-            valid_pct = (~((merged[self.bands[0]].values == 0) |
-                           np.isnan(merged[self.bands[0]].values))).mean() * 100
-            logger.info(f"After merging scene {item.id}: {valid_pct:.1f}% valid pixels")
-            if valid_pct > 90:
-                break
-
-        if merged is None:
+        if loaded == 0:
             raise ValueError("No scenes could be loaded")
-        return merged
 
-    @staticmethod
-    def _filter_to_tile(items: list, tile_id: str) -> list:
-        """Keep only STAC items from a specific MGRS tile."""
-        return [it for it in items if it.properties.get("s2:mgrs_tile", "") == tile_id]
+        merged = {}
+        for band in self.bands:
+            mosaic = merge_arrays(per_band[band], bounds=bounds, res=(30.0, 30.0), nodata=np.nan)
+            merged[band] = mosaic.squeeze(drop=True)
+        out = xr.Dataset(merged).rio.write_crs(target_crs)
+        # Each band still carries encoding inherited from the int16 source COG.
+        # The critical key is dtype=int16: mask_and_scale decoded the data to
+        # float reflectance but left dtype/scale_factor in encoding, so to_netcdf
+        # would re-cast the floats back to int16 — and with scale_factor dropped
+        # that truncates all 0.0-0.5 reflectance to 0. Clear the band encoding
+        # and the stale CF attrs so bands save as plain float32 with NaN nodata,
+        # matching the other cached scenes.
+        for band in self.bands:
+            out[band].encoding.clear()
+            for k in ("_FillValue", "scale_factor", "add_offset"):
+                out[band].attrs.pop(k, None)
+        valid_pct = (~np.isnan(out[self.bands[0]].values)).mean() * 100
+        logger.info(f"Merged {loaded} scene(s) across tiles: {valid_pct:.1f}% valid pixels")
+        return out
+
+    def _filter_to_tile(self, granules: list, tile_id: str) -> list:
+        """Keep only granules from a specific MGRS tile."""
+        return [g for g in granules if self._get_mgrs_tile(g) == tile_id]
 
     def download_region(self, region: dict) -> dict[str, Path]:
         name = region["name"]
@@ -186,39 +197,50 @@ class SentinelDownloader:
 
         bbox = self._region_bbox(region["lat"], region["lon"], region["buffer_km"])
 
-        # --- Post-fire: item[0] (lowest cloud cover) determines the target MGRS tile ---
+        # When a buffer spans more than one MGRS tile, locking to a single tile
+        # leaves the rest of the scene as nodata. Opt-in mosaicking across tiles
+        # (the merge already reprojects every scene onto a common UTM grid) gives
+        # full coverage at the cost of mixing acquisition dates slightly.
+        allow_multitile = region.get("allow_multitile", False)
+
         post_start = region["post_fire_date"]
         post_window_days = region.get("post_fire_window_days", 90)
         post_end_dt = datetime.strptime(post_start, "%Y-%m-%d") + timedelta(days=post_window_days)
-        post_items = self.search_scenes(bbox, f"{post_start}/{post_end_dt.strftime('%Y-%m-%d')}", max_cloud_cover=20)
-        if not post_items:
-            raise ValueError(f"No post-fire scenes found for {name}")
+        post_granules = self.search_scenes(
+            bbox, f"{post_start}/{post_end_dt.strftime('%Y-%m-%d')}", max_cloud_cover=20
+        )
+        if not post_granules:
+            raise ValueError(f"No post-fire HLS scenes found for {name}")
 
-        target_tile = post_items[0].properties.get("s2:mgrs_tile", "")
-        post_items = self._filter_to_tile(post_items, target_tile)
-        logger.info(f"Post-fire: locked to MGRS tile {target_tile} ({len(post_items)} scenes)")
+        if allow_multitile:
+            target_tile = None
+            logger.info(f"Post-fire: multi-tile mosaic ({len(post_granules)} scenes across tiles)")
+        else:
+            target_tile = self._get_mgrs_tile(post_granules[0])
+            post_granules = self._filter_to_tile(post_granules, target_tile)
+            logger.info(f"Post-fire: locked to MGRS tile {target_tile} ({len(post_granules)} scenes)")
 
-        # --- Pre-fire: search for scenes on the SAME tile, widening window if needed ---
         pre_start = region["pre_fire_date"]
-        pre_items = []
+        pre_granules = []
         for days, max_cc in [(28, 20), (60, 30), (90, 40)]:
             end_dt = datetime.strptime(pre_start, "%Y-%m-%d") + timedelta(days=days)
             candidates = self.search_scenes(
                 bbox, f"{pre_start}/{end_dt.strftime('%Y-%m-%d')}", max_cloud_cover=max_cc
             )
-            matched = self._filter_to_tile(candidates, target_tile)
+            matched = candidates if allow_multitile else self._filter_to_tile(candidates, target_tile)
             if matched:
-                pre_items = matched
-                logger.info(f"Pre-fire: found {len(pre_items)} scenes on tile {target_tile}")
+                pre_granules = matched
+                where = "across tiles" if allow_multitile else f"on tile {target_tile}"
+                logger.info(f"Pre-fire: found {len(pre_granules)} scenes {where}")
                 break
-        if not pre_items:
-            raise ValueError(f"No pre-fire scenes found on tile {target_tile} for {name}")
+        if not pre_granules:
+            raise ValueError(f"No pre-fire HLS scenes found for {name}")
 
-        pre_ds = self.load_and_merge_scenes(pre_items, bbox)
+        pre_ds = self.load_and_merge_scenes(pre_granules, bbox)
         pre_ds.to_netcdf(pre_path, engine="h5netcdf")
         logger.info(f"Saved pre-fire scene for {name}: {pre_path}")
 
-        post_ds = self.load_and_merge_scenes(post_items, bbox)
+        post_ds = self.load_and_merge_scenes(post_granules, bbox)
         post_ds.to_netcdf(post_path, engine="h5netcdf")
         logger.info(f"Saved post-fire scene for {name}: {post_path}")
 
@@ -252,7 +274,7 @@ def _restore_crs(ds: xr.Dataset) -> xr.Dataset:
 
 
 def _compute_spectral_indices(ds: xr.Dataset) -> xr.Dataset:
-    nir = ds["B08"].astype(np.float32)
+    nir = ds["B8A"].astype(np.float32)
     swir2 = ds["B12"].astype(np.float32)
     red = ds["B04"].astype(np.float32)
     green = ds["B03"].astype(np.float32)
@@ -266,7 +288,7 @@ def _compute_spectral_indices(ds: xr.Dataset) -> xr.Dataset:
 def generate_burn_mask(
     pre_ds: xr.Dataset,
     post_ds: xr.Dataset,
-    dnbr_threshold: float = 0.27,
+    dnbr_threshold: float = 0.10,
 ) -> np.ndarray:
     """Generate a binary burn scar mask using dNBR. 1 = burned, 0 = unburned."""
     post_ds = post_ds.rio.reproject_match(pre_ds)
@@ -288,22 +310,65 @@ def generate_burn_mask(
     return mask
 
 
+def compute_dnbr(pre_ds: xr.Dataset, post_ds: xr.Dataset) -> np.ndarray:
+    """Continuous dNBR (pre-fire NBR − post-fire NBR) on the pre-fire grid.
+
+    Higher values = more severe burn. Unlike generate_burn_mask this keeps the
+    raw signal (no threshold, no morphology) so it can be binned into USGS
+    severity classes for display.
+
+    Computed directly from B8A/B12 with a guarded denominator: HLS surface
+    reflectance can be slightly negative (atmospheric correction), and where
+    NIR+SWIR2 is approximately 0 the NBR ratio explodes to millions. Those
+    degenerate pixels (water, deep shadow, scene edges - never real burns) and
+    any non-physical abs(dNBR) > 2 are returned as NaN so the severity overlay
+    leaves them transparent.
+    """
+    post_ds = post_ds.rio.reproject_match(pre_ds)
+
+    def _nbr(ds: xr.Dataset) -> np.ndarray:
+        nir = ds["B8A"].values.astype(np.float32)
+        swir2 = ds["B12"].values.astype(np.float32)
+        denom = nir + swir2
+        out = np.full(nir.shape, np.nan, dtype=np.float32)
+        ok = np.abs(denom) > 1e-3
+        out[ok] = (nir[ok] - swir2[ok]) / denom[ok]
+        return out
+
+    dnbr = _nbr(pre_ds) - _nbr(post_ds)
+    dnbr[np.abs(dnbr) > 2.0] = np.nan
+    return dnbr.astype(np.float32)
+
+
 def normalize_bands(ds: xr.Dataset, bands: list[str]) -> np.ndarray:
     """
-    Stack and normalize Sentinel-2 bands using Prithvi pretraining statistics.
+    Stack and normalize HLS bands using Prithvi pretraining statistics.
 
-    Divides by 10000 (Sentinel-2 L2A scale factor) then applies per-band
-    z-score normalization with the mean/std from Prithvi-EO-1.0-100M's
-    HLS pretraining data. Returns (C, H, W).
+    HLS data from earthaccess is already in surface reflectance (0-1 scale).
+    Applies per-band z-score normalization with the mean/std from
+    Prithvi-EO-1.0-100M's HLS pretraining data. Returns (C, H, W).
+
+    Brightness correction: HLS surface reflectance (LaSRC atmospheric correction
+    + BRDF normalization) runs systematically ~1.4-1.9x darker than the HLS
+    distribution Prithvi was pretrained on — most strongly in the visible bands.
+    Fed to the frozen Prithvi encoder, this dark input pushes features toward the
+    low-NIR "burn" signature and floods burn predictions (worst on dark SoCal
+    chaparral scenes). Each band is rescaled by a fixed GAIN, calibrated so the
+    pooled *training*-fire median reflectance matches the Prithvi pretraining mean
+    (no test data, no labels), bringing input back into the encoder's expected
+    range before z-scoring. This lifted held-out IoU substantially (e.g. Woolsey
+    0.53 -> ~0.75); see results/over_prediction_analysis.md.
     """
-    # Prithvi pretraining stats (DN ÷ 10000 scale)
     MEAN = [0.077523, 0.108099, 0.122859, 0.249720, 0.220421, 0.161083]
     STD  = [0.128153, 0.127003, 0.139948, 0.136834, 0.129168, 0.115451]
+    # B02, B03, B04, B8A, B11, B12 (must match the config band order)
+    GAIN = [1.8793, 1.7172, 1.5741, 1.4097, 1.1295, 1.1276]
 
     arrays = []
     for i, band in enumerate(bands):
-        arr = ds[band].values.astype(np.float32) / 10000.0
+        arr = ds[band].values.astype(np.float32)
         arr = np.clip(arr, 0, 1)
+        arr = arr * GAIN[i]
         arr = (arr - MEAN[i]) / STD[i]
         arrays.append(arr)
     return np.stack(arrays, axis=0)
@@ -315,10 +380,23 @@ def create_patches(
     patch_size: int = 224,
     stride: int | None = None,
     min_burn_fraction: float = 0.01,
+    background_keep: float = 0.3,
+    min_valid_fraction: float = 0.5,
+    max_patches: int | None = None,
 ) -> list[dict]:
-    """Slice image and mask into patches, keeping burns + 30% of background."""
+    """Slice image and mask into patches, keeping all burns + a fraction of
+    pure-background patches. Burn scars are rare, so retaining every background
+    patch would swamp the positive class and bias the model toward predicting
+    "unburned"; background_keep caps that imbalance.
+
+    A patch is kept when at least min_valid_fraction of its pixels are valid
+    (not nodata); the remaining nodata is imputed to 0 (≈ per-band mean in
+    z-scored space). Requiring *every* pixel to be valid — as an earlier
+    version did — silently dropped entire large scenes whose every 224x224
+    window clipped a nodata gap, starving training of the biggest fires.
+    max_patches caps the per-call count so a single mega-fire can't dominate."""
     if stride is None:
-        stride = patch_size // 2
+        stride = patch_size // 4
 
     _, h, w = image.shape
     patches = []
@@ -330,12 +408,19 @@ def create_patches(
 
             if img_patch.shape[1:] != (patch_size, patch_size) or mask_patch.shape != (patch_size, patch_size):
                 continue
-            if np.isnan(img_patch).any() or img_patch.max() == 0:
+
+            valid = ~(np.isnan(img_patch).any(axis=0) | (np.nan_to_num(img_patch).max(axis=0) == 0))
+            if valid.mean() < min_valid_fraction:
                 continue
+            img_patch = np.nan_to_num(img_patch, nan=0.0)
 
             burn_frac = mask_patch.sum() / mask_patch.size
-            if burn_frac >= min_burn_fraction or np.random.random() < 0.3:
+            if burn_frac >= min_burn_fraction or np.random.random() < background_keep:
                 patches.append({"image": img_patch, "mask": mask_patch, "burn_fraction": burn_frac})
+
+    if max_patches is not None and len(patches) > max_patches:
+        idx = np.random.choice(len(patches), size=max_patches, replace=False)
+        patches = [patches[i] for i in idx]
 
     logger.info(
         f"Created {len(patches)} patches ({sum(1 for p in patches if p['burn_fraction'] > 0)} with burns)"
@@ -349,15 +434,21 @@ def process_region(
     bands: list[str],
     patch_size: int = 224,
     region_name: str = "",
+    dnbr_threshold: float = 0.10,
+    background_keep: float = 0.3,
+    max_patches: int | None = None,
 ) -> list[dict]:
     """Full preprocessing pipeline for a single region."""
     pre_ds = _restore_crs(xr.open_dataset(pre_path, engine="h5netcdf"))
     post_ds = _restore_crs(xr.open_dataset(post_path, engine="h5netcdf"))
     post_ds = post_ds.rio.reproject_match(pre_ds)
 
-    mask = generate_burn_mask(pre_ds, post_ds)
+    mask = generate_burn_mask(pre_ds, post_ds, dnbr_threshold=dnbr_threshold)
     image = normalize_bands(post_ds, bands)
-    patches = create_patches(image, mask, patch_size=patch_size)
+    patches = create_patches(
+        image, mask, patch_size=patch_size,
+        background_keep=background_keep, max_patches=max_patches,
+    )
 
     for p in patches:
         p["region_name"] = region_name
@@ -406,6 +497,26 @@ class BurnScarDataset(Dataset):
             k = np.random.randint(0, 4)
             image = np.rot90(image, k, axes=(-2, -1)).copy()
             mask = np.rot90(mask, k, axes=(-2, -1)).copy()
+
+        # Random resized crop: zoom into a random sub-window (scale in [0.7,1.0])
+        # and resize back to the patch size. Adds scale/translation invariance —
+        # cheap regularization that matters when fine-tuning the full ViT on few
+        # patches. Spectral values are untouched (no color jitter — it would
+        # corrupt the reflectance-based burn signature).
+        if self.augment_config.get("random_resized_crop", False) and np.random.random() > 0.5:
+            import torch
+            import torch.nn.functional as F
+            C, H, W = image.shape
+            scale = np.random.uniform(0.7, 1.0)
+            ch, cw = max(1, int(H * scale)), max(1, int(W * scale))
+            y0 = np.random.randint(0, H - ch + 1)
+            x0 = np.random.randint(0, W - cw + 1)
+            it = torch.from_numpy(image[:, y0:y0 + ch, x0:x0 + cw]).unsqueeze(0).float()
+            it = F.interpolate(it, size=(H, W), mode="bilinear", align_corners=False)
+            image = it.squeeze(0).numpy()
+            mt = torch.from_numpy(mask[y0:y0 + ch, x0:x0 + cw].astype(np.float32))[None, None]
+            mt = F.interpolate(mt, size=(H, W), mode="nearest")
+            mask = mt.squeeze(0).squeeze(0).numpy().astype(np.int64)
 
         return image, mask
 
