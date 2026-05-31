@@ -8,6 +8,7 @@ space = "evankart/burn-scar-detection"
 
 uploads = [
     ("requirements.txt", "requirements.txt"),
+    ("packages.txt", "packages.txt"),
     ("app.py", "app.py"),
     ("cloud/space_README.md", "README.md"),
     ("src/__init__.py", "src/__init__.py"),
