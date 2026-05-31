@@ -15,6 +15,10 @@ import streamlit as st
 from folium.plugins import Draw, Geocoder
 from streamlit_folium import st_folium
 
+# Make the repo root importable so `from src...` works regardless of launch dir
+# (e.g. on Hugging Face Spaces, where app_file is src/app/streamlit_app.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.visualize import (
