@@ -6,9 +6,13 @@ import json
 import sys
 from pathlib import Path
 
+import math
+from datetime import date
+
 import folium
 import numpy as np
 import streamlit as st
+from folium.plugins import Draw, Geocoder
 from streamlit_folium import st_folium
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -157,6 +161,100 @@ def create_map(region: dict, pred_data: dict | None, overlay_opacity: float) -> 
     return m
 
 
+# ----------------------------------------------------------------------------
+# Custom-AOI live detection (post-fire only)
+# ----------------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def _load_model():
+    from src.infer import load_model
+    return load_model()
+
+
+@st.cache_data(show_spinner=False)
+def run_detection(bbox: tuple, post_date: str) -> dict:
+    """Cached so re-running the same AOI/date is instant."""
+    from src.infer import detect_burn_scar
+    model, device, cfg = _load_model()
+    return detect_burn_scar(bbox, post_date, model, device, cfg)
+
+
+def _aoi_area_km2(bbox: tuple) -> float:
+    minlon, minlat, maxlon, maxlat = bbox
+    midlat = math.radians((minlat + maxlat) / 2)
+    w = (maxlon - minlon) * 111.32 * math.cos(midlat)
+    h = (maxlat - minlat) * 110.57
+    return abs(w * h)
+
+
+def custom_detection_view():
+    st.subheader("Detect burn scars on a custom area")
+    st.markdown(
+        "**1.** Search or zoom to a location · **2.** Draw a polygon or rectangle with the "
+        "tools on the left edge of the map · **3.** Pick a post-fire date · **4.** Run detection.  \n"
+        "_The model runs on a single post-fire HLS scene — no before/after comparison._"
+    )
+    post_date = st.date_input(
+        "Post-fire date",
+        value=date(2020, 9, 15), min_value=date(2015, 7, 1), max_value=date.today(),
+        help="The app finds the least-cloudy HLS scene within ~30 days after this date.",
+    )
+
+    draw_map = folium.Map(location=[39.0, -120.5], zoom_start=6, tiles=None, control_scale=True)
+    folium.TileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri", name="Satellite",
+    ).add_to(draw_map)
+    Geocoder(collapsed=False, add_marker=False).add_to(draw_map)
+    Draw(
+        draw_options={"polyline": False, "circle": False, "marker": False,
+                      "circlemarker": False, "polygon": True, "rectangle": True},
+        edit_options={"edit": False, "remove": True},
+    ).add_to(draw_map)
+    out = st_folium(draw_map, key="draw_map", use_container_width=True, height=480,
+                    returned_objects=["last_active_drawing"])
+
+    # Capture the drawn polygon -> bbox; persist so it survives the button rerun.
+    draw = (out or {}).get("last_active_drawing")
+    if draw and draw.get("geometry", {}).get("type") == "Polygon":
+        ring = draw["geometry"]["coordinates"][0]
+        lons = [p[0] for p in ring]; lats = [p[1] for p in ring]
+        st.session_state["aoi_bbox"] = (min(lons), min(lats), max(lons), max(lats))
+
+    bbox = st.session_state.get("aoi_bbox")
+    if not bbox:
+        st.info("Draw a polygon or rectangle on the map to define your area of interest.")
+        return
+
+    area = _aoi_area_km2(bbox)
+    st.caption(f"AOI ≈ {area:,.0f} km²  ·  bbox {tuple(round(b, 3) for b in bbox)}")
+    if area > 10000:
+        st.warning("Large area — the download and inference will be slow. A smaller AOI "
+                   "(under ~10,000 km²) is recommended.")
+
+    if not st.button("🔥 Detect burn scars", type="primary"):
+        return
+    try:
+        with st.spinner("Finding and downloading the HLS scene, then running the model (~1–3 min)…"):
+            res = run_detection(tuple(round(b, 4) for b in bbox), post_date.isoformat())
+    except Exception as e:
+        st.error(f"Could not run detection: {e}")
+        return
+
+    st.success(f"Detected burn scar over ~{res['burned_frac'] * 100:.1f}% of the area "
+               f"(merged {res['n_scenes']} HLS scene(s)).")
+    s, w = res["bounds"][0]; n, e = res["bounds"][1]
+    rm = folium.Map(location=[(s + n) / 2, (w + e) / 2], zoom_start=10, tiles=None)
+    rm.fit_bounds(res["bounds"])
+    folium.TileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri", name="Satellite",
+    ).add_to(rm)
+    create_sentinel_overlay(res["image"], res["bounds"]).add_to(rm)
+    create_folium_overlay(res["pred_mask"], res["bounds"], opacity=0.6).add_to(rm)
+    folium.LayerControl(collapsed=False).add_to(rm)
+    st_folium(rm, key="result_map", use_container_width=True, height=560, returned_objects=[])
+
+
 def main():
     st.markdown(
         "<style>[data-testid='stMetricValue'] { font-size: 1.6rem; }</style>",
@@ -169,6 +267,17 @@ def main():
     )
 
     overlay_opacity = 0.6
+
+    with st.sidebar:
+        mode = st.radio(
+            "Mode",
+            ["📍 Held-out test fires", "✏️ Detect on custom area"],
+            help="Browse the held-out evaluation fires, or draw your own area and run the model live.",
+        )
+
+    if mode.endswith("custom area"):
+        custom_detection_view()
+        return
 
     # --- Sidebar ---
     with st.sidebar:
