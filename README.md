@@ -1,45 +1,68 @@
 # Wildfire Burn Scar Detection
 
-Burn scar mapping from Harmonized Landsat Sentinel-2 (HLS) satellite imagery using **Prithvi-EO-1.0-100M** — the IBM × NASA geospatial foundation model — fine-tuned for pixel-level segmentation.
+Burn scar segmentation from Harmonized Landsat Sentinel-2 (HLS) satellite imagery using **Prithvi-EO-1.0-100M** — the IBM × NASA geospatial foundation model — with an FPN decoder fine-tuned for pixel-level segmentation.
 
-The model is trained on 12 wildfires across 5 US states and evaluated on 3 held-out fires in different biomes.
+**Live demo:** [huggingface.co/spaces/evankart/burn-scar-detection](https://huggingface.co/spaces/evankart/burn-scar-detection)
+
+Trained on **37 wildfires across 5 US states** (CA, OR, AZ, NM, WA), evaluated on 3 held-out fires in different biomes (Southern California chaparral, Colorado Rockies, Central California coast). Macro IoU **0.64** on the held-out test fires.
 
 ## Architecture
 
 ```
-HLS (6 bands) → Prithvi-EO ViT encoder → FPN decoder → burn scar mask
-                         (100M params,               (3.6M params,
-                          pretrained on               trained from
-                          640k HLS scenes)            scratch)
+HLS (6 bands, 30m) → brightness gain → Prithvi-EO ViT encoder → FPN decoder → burn mask
+                                         (100M params, frozen;         (3.6M params,
+                                          pretrained on 640k HLS)       trained from scratch)
 ```
 
-**Encoder**: [Prithvi-EO-1.0-100M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M) — a 12-layer Vision Transformer pretrained by IBM and NASA on HLS imagery. HLS is the same data product used during Prithvi's pretraining, eliminating domain gap between pretraining and downstream data.
+- **Encoder**: [Prithvi-EO-1.0-100M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M) — 12-layer ViT pretrained by IBM/NASA on HLS. Frozen at inference; features tapped from layers 3, 5, 8, 12.
+- **Decoder**: FPN-style decoder fusing multi-scale encoder features via top-down lateral connections, then upsampling 14×14 → 224×224 in four transposed-conv stages.
+- **Labels**: Auto-derived from dNBR (dNBR = NBR_pre − NBR_post, threshold 0.10). No manual annotation.
+- **Data**: HLS from [NASA Earthdata](https://www.earthdata.nasa.gov/) via `earthaccess`.
 
-**Decoder**: FPN-style decoder that fuses features from encoder layers 3, 5, 8, and 12 via top-down lateral connections, then upsamples 14×14 → 224×224 in four transposed-convolution stages. Tapping multiple encoder layers gives the decoder access to both fine spectral detail (early layers) and high-level semantic patterns (deep layers), improving boundary precision over a single-layer baseline.
+## Key findings
 
-**Labels**: Derived automatically from the differenced Normalized Burn Ratio (dNBR = NBR_pre − NBR_post). Pixels with dNBR > 0.27 are classified as burned — no manual annotation.
+### HLS brightness correction
+HLS surface reflectance (LaSRC + BRDF) runs **~1.4–1.9× darker** than the HLS distribution Prithvi was pretrained on. The frozen encoder reads dark input as burn-like, flooding predictions. A fixed per-band **brightness gain** — calibrated from training-fire medians against Prithvi's expected reflectance — corrects this before normalization. No test-fire leakage.
 
-**Data source**: HLS imagery downloaded from [NASA Earthdata](https://www.earthdata.nasa.gov/) via the `earthaccess` Python package. Requires a free [Earthdata account](https://urs.earthdata.nasa.gov/users/new).
+Effect: Woolsey IoU **0.53 → 0.73**, macro IoU **0.54 → 0.64**.
 
-**Why not TorchGeo?** [TorchGeo](https://github.com/microsoft/torchgeo) provides pre-built dataset classes and samplers for standard remote sensing benchmarks, but this project requires a custom pipeline — HLS scene search and download via `earthaccess`, automatic dNBR label generation from pre/post fire pairs, and region-specific patch extraction with overlap control. TorchGeo's abstractions don't cover this workflow, so wrapping them would add indirection without reducing complexity.
+### What didn't work (documented honestly)
+Asymmetric Tversky loss, threshold recalibration, encoder fine-tuning (overfit on small data), and SoCal hard-negative data all failed to beat the frozen + brightness-corrected baseline on the held-out fires. Full writeup: [`results/over_prediction_analysis.md`](results/over_prediction_analysis.md).
+
+### Encoder fine-tuning
+Layer-wise LR decay + gradual unfreeze infrastructure is implemented (`src/train.py`), and a 37-fire expanded dataset is downloaded and verified. A cloud-based fine-tune run is pending AWS GPU quota approval — the infrastructure is ready (`cloud/RUNBOOK.md`).
 
 ## Project structure
 
 ```
-run_training.py                    train the model
-run_inference.py                   run on held-out fires, save predictions
-scripts/extract_embeddings.py      PCA of Prithvi patch embeddings
-scripts/compare_experiments.py     compare frozen vs. fine-tuned encoder
+run_training.py          train the model (downloads HLS + Prithvi weights on first run)
+run_inference.py         run on any region, save predictions
+app.py                   Streamlit entrypoint (HF Spaces)
 src/
-  data.py      HLS download, preprocess, patch dataset
-  model.py     BurnScarModel (Prithvi encoder + CNN decoder)
-  train.py     training loop
-  visualize.py map overlays + comparison plots
+  data.py                HLS download, preprocessing, patch dataset
+  model.py               BurnScarModel (Prithvi encoder + FPN decoder)
+  train.py               training loop (Tversky loss, LLRD, unfreeze)
+  infer.py               on-demand inference for the custom-AOI tab
+  visualize.py           map overlays + comparison plots
   app/
-    streamlit_app.py   interactive demo
+    streamlit_app.py     interactive demo (held-out fires + live custom detection)
 configs/
-  train_config.yaml      frozen encoder configuration
-  finetune_config.yaml   fine-tuned encoder configuration
+  train_config.yaml      37-fire training configuration
+  finetune_config.yaml   encoder fine-tune configuration (LLRD, gradual unfreeze)
+scripts/
+  calibrate_threshold.py honest threshold calibration on train fires only
+  eval_sweep.py          evaluate checkpoints on held-out fires
+  brightness_diag.py     brightness correction diagnostic
+  push_to_space.py       push all files to HF Space
+  build_demo_notebook.py build the demo/analysis notebook
+cloud/
+  run_job.sh             self-terminating AWS GPU job (download → train → upload → terminate)
+  RUNBOOK.md             step-by-step cloud fine-tune runbook
+  HF_SPACES_RUNBOOK.md   HF Spaces deployment runbook
+notebooks/
+  demo_analysis.ipynb    results notebook (pre-executed, renders on GitHub)
+results/
+  over_prediction_analysis.md  full investigation + brightness-fix writeup
 ```
 
 ## Quick start
@@ -47,45 +70,43 @@ configs/
 ```bash
 pip install -e .
 
-# 1. Train frozen baseline (downloads HLS data + Prithvi weights on first run)
-python run_training.py --experiment-name frozen
+# Train (downloads HLS + Prithvi weights on first run; ~6 hr locally, ~40 min on A100)
+python run_training.py --experiment-name my_run
 
-# 2. Train fine-tuned variant (unfreezes encoder after epoch 3)
-python run_training.py --config configs/finetune_config.yaml --experiment-name finetuned
+# Run inference on held-out fires
+python run_inference.py --region woolsey_fire_2018
 
-# 3. Compare frozen vs. fine-tuned results
-PYTHONPATH=. python scripts/compare_experiments.py
-
-# 4. Run inference on held-out fires
-python run_inference.py --region woolsey_fire_2018 --checkpoint checkpoints/frozen/best_model.pt
-
-# 5. Launch the app
-streamlit run src/app/streamlit_app.py
+# Launch the app locally
+streamlit run app.py
 ```
 
-## Training fires (12)
+Requires a free [NASA Earthdata account](https://urs.earthdata.nasa.gov/users/new) — credentials go in `~/.netrc` or as `EARTHDATA_USERNAME`/`EARTHDATA_PASSWORD` env vars.
 
-**California (9):** August Complex (2020) · Mendocino Complex (2018) · SCU Lightning Complex (2020) · Caldor (2021) · LNU Lightning Complex (2020) · North Complex (2020) · Carr (2018) · Dixie (2021) · Antelope (2021)
+## Results (held-out test fires, fixed 0.5 threshold)
 
-**Oregon (1):** Bootleg (2021)
+| Fire | Precision | Recall | IoU |
+|---|---|---|---|
+| Woolsey (2018, SoCal chaparral) | 76% | 94% | **73%** |
+| East Troublesome (2020, CO Rockies) | 56% | 80% | **49%** |
+| Thomas (2017, CA coast) | 96% | 71% | **69%** |
+| **Macro** | **76%** | **82%** | **64%** |
 
-**New Mexico (1):** Hermits Peak / Calf Canyon (2022)
+## Training fires (37)
 
-**Washington (1):** Pearl Hill (2020)
+**California NorCal/Sierra:** August Complex (2020) · Mendocino Complex (2018) · SCU Lightning Complex (2020) · Caldor (2021) · LNU Lightning Complex (2020) · North Complex (2020) · Carr (2018) · Dixie (2021) · Antelope (2021) · Mosquito (2022) · Monument (2021) · River/Carmel (2020) · Camp Fire (2018) · Tubbs (2017) · Kincade (2019) · Glass (2020)
+
+**California SoCal chaparral:** Bobcat (2020) · Holy (2018) · Apple (2020) · Cranston (2018) · Saddleridge (2019) · El Dorado (2020) · Valley (2020) · Lake (2020) · Blue Ridge (2020) · Bond (2020) · La Tuna (2017)
+
+**Oregon:** Bootleg (2021) · Pearl Hill (2020, WA) · Holiday Farm (2020) · Beachie Creek (2020)
+
+**Colorado:** Cameron Peak (2020) · Calwood (2020) · Spring Creek (2018)
+
+**Arizona:** Bighorn (2020) · Bush (2020) · Telegraph (2021)
 
 ## Test fires (3, held out)
 
-| Fire | Year | Location | Ecosystem |
+| Fire | Year | Location | Biome |
 |---|---|---|---|
-| Woolsey | 2018 | Southern California | Chaparral |
+| Woolsey | 2018 | Southern California | Coastal chaparral |
 | East Troublesome | 2020 | Colorado Rockies | Subalpine conifer |
-| Thomas | 2017 | Central California coast | Coastal mountains |
-
-## Frozen vs. fine-tuned encoder
-
-The project includes two training configurations to compare transfer learning strategies:
-
-- **Frozen**: Prithvi encoder weights are fixed; only the CNN decoder trains (8M params)
-- **Fine-tuned**: Encoder is frozen for 3 epochs, then unfreezes and both encoder + decoder train together (108M params) at a reduced learning rate
-
-Results are generated by `scripts/compare_experiments.py`.
+| Thomas | 2017 | Ventura/Santa Barbara, CA | Coastal mountains |
