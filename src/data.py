@@ -148,12 +148,14 @@ class HLSDownloader:
 
         per_band: dict[str, list] = {b: [] for b in self.bands}
         loaded = 0
+        last_err = None
         for granule in granules[:max_scenes]:
             granule_id = granule.get("meta", {}).get("native-id", "unknown")
             try:
                 ds = self.load_scene(granule, bbox)
             except Exception as e:
-                logger.warning(f"Skipping scene {granule_id}: {e}")
+                last_err = e
+                logger.warning(f"Skipping scene {granule_id}: {type(e).__name__}: {e}")
                 continue
             for band in self.bands:
                 da = ds[band].rio.write_nodata(np.nan)
@@ -165,7 +167,10 @@ class HLSDownloader:
             gc.collect()
 
         if loaded == 0:
-            raise ValueError("No scenes could be loaded")
+            msg = "No scenes could be loaded"
+            if last_err:
+                msg += f" (last error: {type(last_err).__name__}: {last_err})"
+            raise ValueError(msg)
 
         merged = {}
         for band in self.bands:
