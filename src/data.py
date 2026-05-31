@@ -84,7 +84,7 @@ class HLSDownloader:
             # mask_and_scale: apply HLS scale_factor (0.0001) and decode the
             # -9999 fill to NaN, yielding float surface reflectance. normalize_bands
             # and the merge step both require float+NaN, not raw int16 DN.
-            da = rioxarray.open_rasterio(matched[0], chunks={"x": 512, "y": 512}, mask_and_scale=True)
+            da = rioxarray.open_rasterio(matched[0], mask_and_scale=True)
             geom = box(*bbox)
             da = da.rio.clip([mapping(geom)], crs="EPSG:4326")
             band_arrays[band] = da.squeeze("band", drop=True)
