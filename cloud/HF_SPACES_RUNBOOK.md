@@ -27,12 +27,11 @@ Hosts both tabs: precomputed held-out results, and live custom-area detection
        data/predictions/$f.npz predictions/$f.npz --repo-type dataset
    done
    ```
-5. **Create the Space and push the app:**
-   ```bash
-   huggingface-cli repo create burn-scar-detection --type space --space_sdk streamlit -y
-   # clone the space, copy app code + cloud/space_README.md -> README.md, push
-   ```
-   (`app_file: src/app/streamlit_app.py` is set in the Space README front-matter.)
+5. **Create the Space and push the app** (the assistant handles this):
+   Uploads `app.py`, all `src/**/*.py`, `configs/train_config.yaml`, `requirements.txt`,
+   and `cloud/space_README.md` → `README.md`. The `app_file: app.py` in the README
+   front-matter tells Spaces to run the top-level entrypoint (which is in the repo root,
+   so `from src.X import` always resolves without sys.path hacks).
 
 ## Notes
 - **Latency:** first live detection on CPU is ~2–4 min (download + model). Cached after.
