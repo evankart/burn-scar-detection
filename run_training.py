@@ -20,7 +20,7 @@ import numpy as np
 import yaml
 import torch
 
-from src.data import SentinelDownloader, process_region, create_dataloaders
+from src.data import HLSDownloader, process_region, create_dataloaders
 from src.model import BurnScarModel
 from src.train import Trainer
 from src.visualize import plot_training_curves
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 def download_regions(regions: list[dict], config_path: str) -> dict:
     """Download all regions, return {name: {pre: Path, post: Path}}."""
-    downloader = SentinelDownloader(config_path)
+    downloader = HLSDownloader(config_path)
     results = {}
     for region in regions:
         try:
@@ -60,6 +60,9 @@ def collect_patches(regions: list[dict], downloaded: dict, config: dict) -> list
                 bands=config["data"]["bands"],
                 patch_size=config["data"]["patch_size"],
                 region_name=name,
+                dnbr_threshold=config["data"].get("dnbr_threshold", 0.10),
+                background_keep=config["data"].get("background_keep", 0.3),
+                max_patches=config["data"].get("max_patches_per_region"),
             )
             logger.info(f"  {name}: {len(patches)} patches")
             all_patches.extend(patches)
@@ -71,10 +74,29 @@ def collect_patches(regions: list[dict], downloaded: dict, config: dict) -> list
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/train_config.yaml")
+    parser.add_argument("--experiment-name", default="default")
+    # Optional overrides for the precision/recall sweep. Tversky alpha penalizes
+    # false positives, beta penalizes false negatives (alpha=beta=0.5 == Dice).
+    parser.add_argument("--tversky-alpha", type=float, default=None)
+    parser.add_argument("--tversky-beta", type=float, default=None)
+    parser.add_argument("--class-weights", type=float, nargs=2, default=None,
+                        help="Override CE class weights, e.g. --class-weights 0.5 0.5")
     args = parser.parse_args()
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
+
+    if args.tversky_alpha is not None:
+        config["training"]["tversky_alpha"] = args.tversky_alpha
+    if args.tversky_beta is not None:
+        config["training"]["tversky_beta"] = args.tversky_beta
+    if args.class_weights is not None:
+        config["training"]["class_weights"] = list(args.class_weights)
+    logger.info(
+        f"Loss config — class_weights={config['training']['class_weights']}, "
+        f"tversky_alpha={config['training'].get('tversky_alpha', 0.5)}, "
+        f"tversky_beta={config['training'].get('tversky_beta', 0.5)}"
+    )
 
     torch.manual_seed(config["training"]["seed"])
 
@@ -83,32 +105,55 @@ def main():
     all_regions = train_regions + test_regions
 
     # --- 1. Download all regions ---
-    logger.info("=== Downloading Sentinel-2 imagery ===")
+    logger.info("=== Downloading HLS imagery ===")
     logger.info(f"Train fires: {[r['name'] for r in train_regions]}")
     logger.info(f"Test fires:  {[r['name'] for r in test_regions]}")
     downloaded = download_regions(all_regions, args.config)
 
-    # --- 2. Build train patches (fire-based split, Woolsey excluded) ---
+    # --- 2. Build train patches (fire-based split, test fires excluded) ---
     logger.info("=== Preprocessing train fires ===")
     train_patches = collect_patches(train_regions, downloaded, config)
+
+    # Hard-negative regions: unburned dry SoCal terrain (≈all-background masks).
+    # They teach the post-only model that dark/dry land is not burned, curbing
+    # over-prediction. Downloaded + patched through the same pipeline.
+    negative_regions = config["data"].get("negative_regions", [])
+    if negative_regions:
+        logger.info(f"=== Preprocessing hard-negative regions: {[r['name'] for r in negative_regions]} ===")
+        downloaded_neg = download_regions(negative_regions, args.config)
+        neg_patches = collect_patches(negative_regions, downloaded_neg, config)
+        logger.info(f"Added {len(neg_patches)} hard-negative patches from {len(negative_regions)} regions")
+        train_patches.extend(neg_patches)
 
     if len(train_patches) < 10:
         logger.error("Too few training patches. Check downloads.")
         return
 
-    # Split train patches 90/10 into train/val
-    rng = np.random.default_rng(config["training"]["seed"])
-    indices = rng.permutation(len(train_patches))
-    split = int(len(train_patches) * config["data"]["train_split"])
-    train_idx, val_idx = indices[:split], indices[split:]
-    split_patches = {
-        "train": [train_patches[i] for i in train_idx],
-        "val":   [train_patches[i] for i in val_idx],
-        "test":  [],
-    }
+    val_fires = config["data"].get("val_fires", [])
+    if val_fires:
+        # Fire-based split: hold out whole fires for validation so train and val
+        # patches never come from the same scene. A random patch split lets
+        # patches from one fire land in both train and val (spatially adjacent,
+        # near-duplicate), giving an optimistic val IoU that hides overfitting —
+        # which matters most when fine-tuning the full ViT.
+        split_patches = {
+            "train": [p for p in train_patches if p.get("region_name") not in val_fires],
+            "val":   [p for p in train_patches if p.get("region_name") in val_fires],
+            "test":  [],
+        }
+        logger.info(f"Fire-based val split — holding out {val_fires} for validation")
+    else:
+        rng = np.random.default_rng(config["training"]["seed"])
+        indices = rng.permutation(len(train_patches))
+        split = int(len(train_patches) * config["data"]["train_split"])
+        train_idx, val_idx = indices[:split], indices[split:]
+        split_patches = {
+            "train": [train_patches[i] for i in train_idx],
+            "val":   [train_patches[i] for i in val_idx],
+            "test":  [],
+        }
     logger.info(
-        f"Patch split — train: {len(split_patches['train'])}, "
-        f"val: {len(split_patches['val'])}"
+        f"Patch split — train: {len(split_patches['train'])}, val: {len(split_patches['val'])}"
     )
 
     # --- 3. Create dataloaders ---
@@ -125,12 +170,14 @@ def main():
     logger.info(f"Trainable parameters: {trainable:,}")
 
     # --- 5. Train ---
-    logger.info("=== Training ===")
-    trainer = Trainer(model, config, dataloaders)
+    checkpoint_dir = f"checkpoints/{args.experiment_name}"
+    logger.info(f"=== Training (experiment: {args.experiment_name}) ===")
+    trainer = Trainer(model, config, dataloaders, checkpoint_dir=checkpoint_dir)
     history = trainer.train()
 
-    plot_training_curves(history, save_path="training_curves.png")
-    logger.info("Training complete. Best model saved to checkpoints/best_model.pt")
+    curves_path = f"{checkpoint_dir}/training_curves.png"
+    plot_training_curves(history, save_path=curves_path)
+    logger.info(f"Training complete. Best model saved to {checkpoint_dir}/best_model.pt")
     logger.info("Run inference on Woolsey Fire: python run_inference.py --region woolsey_fire_2018")
 
 

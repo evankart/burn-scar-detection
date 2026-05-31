@@ -23,6 +23,50 @@ def get_device():
     return torch.device("cpu")
 
 
+class CETverskyLoss(nn.Module):
+    """Weighted cross-entropy + soft Tversky on the burn class.
+
+    CE supervises per-pixel classification; Tversky directly optimizes region
+    overlap (like Dice) but adds an asymmetric penalty knob that controls the
+    precision/recall tradeoff — the Tversky index is
+
+        TI = TP / (TP + alpha*FP + beta*FN)
+
+    where alpha penalizes false positives and beta penalizes false negatives.
+    alpha == beta == 0.5 recovers the soft Dice loss exactly. Raising alpha
+    above beta penalizes over-prediction (false alarms), trading recall for
+    precision — the lever we use to curb a model that floods burn predictions.
+    Both alpha/beta and class_weights are calibrated on the held-out *training*
+    fires' validation split only, never the test fires, to avoid leakage.
+    """
+
+    def __init__(
+        self,
+        class_weights: torch.Tensor,
+        tversky_weight: float = 1.0,
+        alpha: float = 0.5,
+        beta: float = 0.5,
+        smooth: float = 1.0,
+    ):
+        super().__init__()
+        self.ce = nn.CrossEntropyLoss(weight=class_weights)
+        self.tversky_weight = tversky_weight
+        self.alpha = alpha
+        self.beta = beta
+        self.smooth = smooth
+
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        ce = self.ce(logits, labels)
+        probs = torch.softmax(logits, dim=1)[:, 1]  # P(burn) per pixel
+        target = (labels == 1).float()
+        dims = (1, 2)
+        tp = (probs * target).sum(dims)
+        fp = (probs * (1.0 - target)).sum(dims)
+        fn = ((1.0 - probs) * target).sum(dims)
+        tversky = (tp + self.smooth) / (tp + self.alpha * fp + self.beta * fn + self.smooth)
+        return ce + self.tversky_weight * (1.0 - tversky.mean())
+
+
 def compute_metrics(preds: np.ndarray, labels: np.ndarray, num_classes: int = 2) -> dict:
     pixel_accuracy = float((preds == labels).sum() / labels.size)
 
@@ -44,24 +88,22 @@ def compute_metrics(preds: np.ndarray, labels: np.ndarray, num_classes: int = 2)
 
 
 class Trainer:
-    def __init__(self, model: nn.Module, config: dict, dataloaders: dict, device=None):
+    def __init__(self, model: nn.Module, config: dict, dataloaders: dict, device=None, checkpoint_dir: str = "checkpoints"):
         self.config = config
         self.tc = config["training"]
         self.dataloaders = dataloaders
         self.device = device or get_device()
         self.model = model.to(self.device)
 
-        encoder_params, decoder_params = [], []
-        for name, param in self.model.named_parameters():
-            if not param.requires_grad:
-                continue
-            (encoder_params if "encoder" in name else decoder_params).append(param)
+        self.base_lr = self.tc["learning_rate"]
+        self.backbone_mult = self.tc["backbone_lr_multiplier"]
+        self.llrd_decay = self.tc.get("llrd_decay", 1.0)  # 1.0 = no layer-wise decay
 
-        lr = self.tc["learning_rate"]
-        self.optimizer = AdamW([
-            {"params": encoder_params, "lr": lr * self.tc["backbone_lr_multiplier"]},
-            {"params": decoder_params, "lr": lr},
-        ], weight_decay=self.tc["weight_decay"])
+        # Build the optimizer over currently-trainable params. If the encoder is
+        # frozen at init it is excluded here and re-added (with layer-wise LR
+        # decay) when it unfreezes — see _build_optimizer / the train loop.
+        encoder_trainable = any(p.requires_grad for n, p in self.model.named_parameters() if "encoder" in n)
+        self.optimizer = self._build_optimizer(include_encoder=encoder_trainable)
 
         warmup = LinearLR(self.optimizer, start_factor=0.1, total_iters=self.tc["warmup_epochs"])
         cosine = CosineAnnealingLR(self.optimizer, T_max=self.tc["epochs"] - self.tc["warmup_epochs"])
@@ -71,12 +113,16 @@ class Trainer:
         )
 
         weights = torch.tensor(self.tc["class_weights"], dtype=torch.float32).to(self.device)
-        self.criterion = nn.CrossEntropyLoss(weight=weights)
+        self.criterion = CETverskyLoss(
+            weights,
+            alpha=self.tc.get("tversky_alpha", 0.5),
+            beta=self.tc.get("tversky_beta", 0.5),
+        )
 
         self.best_metric = 0.0
         self.patience_counter = 0
-        self.checkpoint_dir = Path("checkpoints")
-        self.checkpoint_dir.mkdir(exist_ok=True)
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         self.use_wandb = False
         try:
@@ -88,6 +134,33 @@ class Trainer:
                 logger.info("W&B not logged in, logging to console only")
         except Exception:
             logger.info("W&B not available, logging to console only")
+
+    def _build_optimizer(self, include_encoder: bool):
+        """AdamW with the decoder at base LR and (optionally) the encoder at a
+        much lower LR with layer-wise decay: shallow Prithvi layers (patch embed,
+        early blocks) get the smallest LR so their general pretrained features are
+        preserved, deeper layers a bit more. llrd_decay=1.0 disables the decay
+        (uniform encoder LR = base_lr * backbone_mult)."""
+        import re
+        N_BLOCKS = 12
+        top = N_BLOCKS + 1
+
+        def layer_of(name: str) -> int:
+            if any(k in name for k in ("patch_embed", "cls_token", "pos_embed")):
+                return 0
+            m = re.search(r"blocks\.(\d+)\.", name)
+            if m:
+                return int(m.group(1)) + 1
+            return top  # encoder.norm etc. — closest to the decoder
+
+        groups = [{"params": [p for n, p in self.model.named_parameters()
+                              if "encoder" not in n and p.requires_grad], "lr": self.base_lr}]
+        if include_encoder:
+            for name, p in self.model.named_parameters():
+                if "encoder" in name and p.requires_grad:
+                    lr = self.base_lr * self.backbone_mult * (self.llrd_decay ** (top - layer_of(name)))
+                    groups.append({"params": [p], "lr": lr})
+        return AdamW(groups, weight_decay=self.tc["weight_decay"])
 
     def train_epoch(self, epoch: int) -> dict:
         self.model.train()
@@ -153,6 +226,17 @@ class Trainer:
                 and hasattr(self.model, "unfreeze_backbone")
             ):
                 self.model.unfreeze_backbone()
+                # The encoder was excluded from the optimizer while frozen; rebuild
+                # it (with layer-wise LR decay) so the now-trainable encoder params
+                # are actually optimized, then give the run a fresh cosine schedule
+                # over the remaining epochs.
+                self.optimizer = self._build_optimizer(include_encoder=True)
+                remaining = max(1, self.tc["epochs"] - epoch + 1)
+                self.scheduler = CosineAnnealingLR(self.optimizer, T_max=remaining)
+                n_enc = sum(p.numel() for n, p in self.model.named_parameters()
+                            if "encoder" in n and p.requires_grad)
+                logger.info(f"Unfroze encoder ({n_enc:,} params) — rebuilt optimizer "
+                            f"with LLRD (decay={self.llrd_decay}), cosine over {remaining} epochs")
 
             train_metrics = self.train_epoch(epoch)
             val_metrics = self.validate()
@@ -193,6 +277,7 @@ class Trainer:
             import wandb
             wandb.finish()
 
+        torch.save(history, self.checkpoint_dir / "history.pt")
         return history
 
     def _save_checkpoint(self, epoch: int, metrics: dict, is_best: bool = False):

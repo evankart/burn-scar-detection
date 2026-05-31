@@ -1,38 +1,45 @@
 # Wildfire Burn Scar Detection
 
-Burn scar mapping from Sentinel-2 satellite imagery using **Prithvi-EO-1.0-100M** — the IBM × NASA geospatial foundation model — fine-tuned for pixel-level segmentation.
+Burn scar mapping from Harmonized Landsat Sentinel-2 (HLS) satellite imagery using **Prithvi-EO-1.0-100M** — the IBM × NASA geospatial foundation model — fine-tuned for pixel-level segmentation.
 
-The model is trained on 8 large California wildfires and evaluated on the **Woolsey Fire (2018)**.
+The model is trained on 12 wildfires across 5 US states and evaluated on 3 held-out fires in different biomes.
 
 ## Architecture
 
 ```
-Sentinel-2 (6 bands) → Prithvi-EO ViT encoder → CNN decoder → burn scar mask
-                         (100M params,               (8M params,
+HLS (6 bands) → Prithvi-EO ViT encoder → FPN decoder → burn scar mask
+                         (100M params,               (3.6M params,
                           pretrained on               trained from
                           640k HLS scenes)            scratch)
 ```
 
-**Encoder**: [Prithvi-EO-1.0-100M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M) — a 12-layer Vision Transformer pretrained by IBM and NASA on Harmonized Landsat Sentinel-2 (HLS) imagery. The encoder is frozen; only the decoder is fine-tuned.
+**Encoder**: [Prithvi-EO-1.0-100M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M) — a 12-layer Vision Transformer pretrained by IBM and NASA on HLS imagery. HLS is the same data product used during Prithvi's pretraining, eliminating domain gap between pretraining and downstream data.
 
-**Decoder**: Four-stage transposed-convolution upsampling network that maps 14×14 patch embeddings back to 224×224 pixel-level predictions.
+**Decoder**: FPN-style decoder that fuses features from encoder layers 3, 5, 8, and 12 via top-down lateral connections, then upsamples 14×14 → 224×224 in four transposed-convolution stages. Tapping multiple encoder layers gives the decoder access to both fine spectral detail (early layers) and high-level semantic patterns (deep layers), improving boundary precision over a single-layer baseline.
 
 **Labels**: Derived automatically from the differenced Normalized Burn Ratio (dNBR = NBR_pre − NBR_post). Pixels with dNBR > 0.27 are classified as burned — no manual annotation.
+
+**Data source**: HLS imagery downloaded from [NASA Earthdata](https://www.earthdata.nasa.gov/) via the `earthaccess` Python package. Requires a free [Earthdata account](https://urs.earthdata.nasa.gov/users/new).
+
+**Why not TorchGeo?** [TorchGeo](https://github.com/microsoft/torchgeo) provides pre-built dataset classes and samplers for standard remote sensing benchmarks, but this project requires a custom pipeline — HLS scene search and download via `earthaccess`, automatic dNBR label generation from pre/post fire pairs, and region-specific patch extraction with overlap control. TorchGeo's abstractions don't cover this workflow, so wrapping them would add indirection without reducing complexity.
 
 ## Project structure
 
 ```
-run_training.py              train the model on 8 CA fires
-run_inference.py             run on Woolsey Fire, save predictions
-scripts/extract_embeddings.py  PCA of Prithvi patch embeddings
+run_training.py                    train the model
+run_inference.py                   run on held-out fires, save predictions
+scripts/extract_embeddings.py      PCA of Prithvi patch embeddings
+scripts/compare_experiments.py     compare frozen vs. fine-tuned encoder
 src/
-  data.py      download, preprocess, patch dataset
+  data.py      HLS download, preprocess, patch dataset
   model.py     BurnScarModel (Prithvi encoder + CNN decoder)
   train.py     training loop
   visualize.py map overlays + comparison plots
   app/
     streamlit_app.py   interactive demo
-configs/train_config.yaml
+configs/
+  train_config.yaml      frozen encoder configuration
+  finetune_config.yaml   fine-tuned encoder configuration
 ```
 
 ## Quick start
@@ -40,31 +47,45 @@ configs/train_config.yaml
 ```bash
 pip install -e .
 
-# 1. Train (downloads Prithvi weights ~450 MB on first run; ~45 min on M1)
-python run_training.py
+# 1. Train frozen baseline (downloads HLS data + Prithvi weights on first run)
+python run_training.py --experiment-name frozen
 
-# 2. Run inference on the held-out Woolsey Fire
-python run_inference.py --region woolsey_fire_2018
+# 2. Train fine-tuned variant (unfreezes encoder after epoch 3)
+python run_training.py --config configs/finetune_config.yaml --experiment-name finetuned
 
-# 3. Extract Prithvi embeddings for the embedding space visualization
-python scripts/extract_embeddings.py
+# 3. Compare frozen vs. fine-tuned results
+PYTHONPATH=. python scripts/compare_experiments.py
 
-# 4. Launch the app
+# 4. Run inference on held-out fires
+python run_inference.py --region woolsey_fire_2018 --checkpoint checkpoints/frozen/best_model.pt
+
+# 5. Launch the app
 streamlit run src/app/streamlit_app.py
 ```
 
-## Training fires
+## Training fires (12)
 
-August Complex (2020) · Mendocino Complex (2018) · SCU Lightning Complex (2020) · Creek Fire (2020) · LNU Lightning Complex (2020) · Thomas Fire (2017) · Caldor Fire (2021) · Antelope Fire (2021)
+**California (9):** August Complex (2020) · Mendocino Complex (2018) · SCU Lightning Complex (2020) · Caldor (2021) · LNU Lightning Complex (2020) · North Complex (2020) · Carr (2018) · Dixie (2021) · Antelope (2021)
 
-## Results on Woolsey Fire (held out)
+**Oregon (1):** Bootleg (2021)
 
-The model was trained on 8 Northern/Central California wildfires and has never seen the Woolsey Fire.
+**New Mexico (1):** Hermits Peak / Calf Canyon (2022)
 
-| Metric | Value |
-|---|---|
-| Recall | 75% |
-| Precision | 77% |
-| IoU | 61% |
+**Washington (1):** Pearl Hill (2020)
 
-Evaluated against dNBR ground truth (pixels with dNBR > 0.10 classified as burned). Water pixels are masked using NDWI before evaluation. The Woolsey Fire burned through chaparral in the Santa Monica Mountains — chaparral recovers faster spectrally than the conifer forests in the training set, so lower dNBR thresholds are appropriate. The model's predictions align visually with the official CAL FIRE perimeter.
+## Test fires (3, held out)
+
+| Fire | Year | Location | Ecosystem |
+|---|---|---|---|
+| Woolsey | 2018 | Southern California | Chaparral |
+| East Troublesome | 2020 | Colorado Rockies | Subalpine conifer |
+| Thomas | 2017 | Central California coast | Coastal mountains |
+
+## Frozen vs. fine-tuned encoder
+
+The project includes two training configurations to compare transfer learning strategies:
+
+- **Frozen**: Prithvi encoder weights are fixed; only the CNN decoder trains (8M params)
+- **Fine-tuned**: Encoder is frozen for 3 epochs, then unfreezes and both encoder + decoder train together (108M params) at a reduced learning rate
+
+Results are generated by `scripts/compare_experiments.py`.

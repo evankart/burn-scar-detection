@@ -15,7 +15,7 @@ import torch
 import xarray as xr
 import yaml
 
-from src.data import normalize_bands, generate_burn_mask, _restore_crs
+from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs
 from src.model import BurnScarModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -29,54 +29,76 @@ def run_inference(
     bands: list[str],
     patch_size: int = 224,
     device: torch.device = torch.device("cpu"),
+    dnbr_threshold: float = 0.10,
+    pred_threshold: float = 0.4,
+    return_prob: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Run sliding-window inference on a full scene.
-    Returns (pred_mask, true_mask, image).
+    Returns (pred_mask, true_mask, image), or with return_prob=True also appends
+    the continuous burn-probability map (pre-threshold) for threshold calibration.
+
+    dnbr_threshold must match the value used to generate training labels,
+    otherwise the model is scored against a different definition of "burned"
+    than it was trained on.
     """
     image = normalize_bands(post_ds, bands)
-    true_mask = generate_burn_mask(pre_ds, post_ds, dnbr_threshold=0.10)
+    true_mask = generate_burn_mask(pre_ds, post_ds, dnbr_threshold=dnbr_threshold)
 
     _, h, w = image.shape
     pred_mask = np.zeros((h, w), dtype=np.float32)
     count_mask = np.zeros((h, w), dtype=np.float32)
 
+    # Per-pixel validity (NaN or all-zero bands = nodata), computed once. Lets us
+    # impute nodata *within* a patch rather than discarding the whole 224x224
+    # window: a single cloud pixel used to skip the patch entirely, leaving large
+    # valid (and often burned) areas with no prediction.
+    valid_px = ~(np.isnan(image).any(axis=0) | (np.nan_to_num(image).max(axis=0) == 0))
+
     stride = patch_size // 2
     model.eval()
 
+    # Edge-anchored grid: append a final row/col flush to the scene edge so the
+    # bottom/right strips a fixed stride would otherwise skip are still covered.
+    ys = list(range(0, h - patch_size + 1, stride))
+    xs = list(range(0, w - patch_size + 1, stride))
+    if ys and ys[-1] != h - patch_size:
+        ys.append(h - patch_size)
+    if xs and xs[-1] != w - patch_size:
+        xs.append(w - patch_size)
+
     with torch.no_grad():
-        for y in range(0, h - patch_size + 1, stride):
-            for x in range(0, w - patch_size + 1, stride):
-                patch = image[:, y : y + patch_size, x : x + patch_size]
-                if np.isnan(patch).any() or patch.max() == 0:
+        for y in ys:
+            for x in xs:
+                pv = valid_px[y : y + patch_size, x : x + patch_size]
+                if not pv.any():
                     continue
-
+                # Impute nodata to 0 (≈ per-band mean in z-scored space) so the
+                # model can score the valid pixels; only those are accumulated.
+                patch = np.nan_to_num(image[:, y : y + patch_size, x : x + patch_size], nan=0.0)
                 tensor = torch.from_numpy(patch).unsqueeze(0).float().to(device)
-                logits = model(tensor)
-                probs = torch.softmax(logits, dim=1)[0, 1].cpu().numpy()
+                probs = torch.softmax(model(tensor), dim=1)[0, 1].cpu().numpy()
 
-                pred_mask[y : y + patch_size, x : x + patch_size] += probs
-                count_mask[y : y + patch_size, x : x + patch_size] += 1
+                region = pred_mask[y : y + patch_size, x : x + patch_size]
+                creg = count_mask[y : y + patch_size, x : x + patch_size]
+                region[pv] += probs[pv]
+                creg[pv] += 1
 
-    valid = count_mask > 0
-    pred_mask[valid] /= count_mask[valid]
-    pred_binary = (pred_mask > 0.4).astype(np.uint8)
+    covered = count_mask > 0
+    pred_mask[covered] /= count_mask[covered]
+    pred_binary = (pred_mask > pred_threshold).astype(np.uint8)
 
+    # Trim a thin border of the valid region — predictions abutting imputed
+    # nodata are unreliable.
     from scipy.ndimage import binary_erosion
-    data_valid = ~(np.isnan(image).any(axis=0) | (image.max(axis=0) == 0))
-    data_valid = binary_erosion(data_valid, iterations=10)
-    pred_binary[~data_valid] = 0
+    trim = ~binary_erosion(valid_px, iterations=10)
+    pred_binary[trim] = 0
 
-    # Mask out water using NDWI from raw bands (before z-score normalization).
-    # Water has NDWI = (Green - NIR) / (Green + NIR) > 0.1.
-    # Bands: B02=0, B03=1(Green), B04=2, B08=3(NIR), B11=4, B12=5
-    b03 = post_ds["B03"].values.astype(float)
-    b08 = post_ds["B08"].values.astype(float)
-    denom = b03 + b08
-    denom[denom == 0] = np.nan
-    ndwi = (b03 - b08) / denom
-    water_mask = ndwi > 0.1
-    pred_binary[water_mask] = 0
+    if return_prob:
+        prob = pred_mask.copy()
+        prob[trim] = 0.0
+        prob[~covered] = 0.0
+        return pred_binary, true_mask, image, prob
 
     return pred_binary, true_mask, image
 
@@ -85,7 +107,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", required=True, help="Region name or 'all'")
     parser.add_argument("--config", default="configs/train_config.yaml")
-    parser.add_argument("--checkpoint", default="checkpoints/best_model.pt")
+    parser.add_argument("--checkpoint", default="checkpoints/balanced_chaparral/best_model.pt")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -143,16 +165,47 @@ def main():
             bands=config["data"]["bands"],
             patch_size=config["data"]["patch_size"],
             device=device,
+            dnbr_threshold=config["data"].get("dnbr_threshold", 0.10),
+            pred_threshold=config["data"].get("pred_threshold", 0.4),
         )
+
+        # Continuous dNBR (same grid as true_mask) for the severity overlay.
+        dnbr = compute_dnbr(pre_ds, post_ds)
+
+        # Water exclusion. Open water is not burnable, yet both the model
+        # (post-only) and the dNBR label produce spurious "burned" pixels over
+        # it: where NIR ≈ SWIR ≈ 0, NBR is pure noise and dNBR randomly crosses
+        # the threshold. Mask water deterministically from the NDWI spectral
+        # index (green vs NIR) — independent of the model and never tuned on the
+        # test fires. Burn scars sit at NDWI ≤ 0 (NIR ≥ green), so a 0 cutoff
+        # removes ocean/lakes without eating real burns.
+        green = post_ds["B03"].values.astype(np.float32)
+        nir = post_ds["B8A"].values.astype(np.float32)
+        ndwi = (green - nir) / (green + nir + 1e-8)
+        water = ndwi > config["data"].get("water_ndwi_threshold", 0.0)
+        if water.shape == pred_mask.shape:
+            pred_mask[water] = 0
+            true_mask[water] = 0
+            dnbr[water] = np.nan
+            logger.info(f"Masked {int(water.sum())} water pixels (NDWI>0)")
 
         try:
             from pyproj import Transformer
             crs = post_ds.rio.crs
-            native_bounds = post_ds.rio.bounds()
+            minx, miny, maxx, maxy = post_ds.rio.bounds()
             transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-            min_lon, min_lat = transformer.transform(native_bounds[0], native_bounds[1])
-            max_lon, max_lat = transformer.transform(native_bounds[2], native_bounds[3])
-            bounds = [[min_lat, min_lon], [max_lat, max_lon]]
+            # A north-up UTM box maps to a slightly rotated quadrilateral in
+            # lat/lon, so the extreme lon/lat fall on the NW/SE corners, not the
+            # SW/NE pair the old 2-corner transform used. Densify all four edges
+            # and take min/max so the axis-aligned bbox encloses the true footprint.
+            n = 50
+            xs_edge = np.linspace(minx, maxx, n)
+            ys_edge = np.linspace(miny, maxy, n)
+            ex = np.concatenate([xs_edge, xs_edge, np.full(n, minx), np.full(n, maxx)])
+            ey = np.concatenate([np.full(n, miny), np.full(n, maxy), ys_edge, ys_edge])
+            lon, lat = transformer.transform(ex, ey)
+            bounds = [[float(np.min(lat)), float(np.min(lon))],
+                      [float(np.max(lat)), float(np.max(lon))]]
         except Exception:
             buffer = region["buffer_km"] * 0.009
             bounds = [
@@ -166,6 +219,7 @@ def main():
             pred_mask=pred_mask,
             true_mask=true_mask,
             image=image,
+            dnbr=dnbr,
             bounds=np.array(bounds),
         )
         logger.info(f"Saved predictions to {out_path}")

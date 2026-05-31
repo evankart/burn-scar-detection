@@ -13,44 +13,89 @@ from streamlit_folium import st_folium
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.visualize import create_folium_overlay, create_sentinel_overlay
+from src.visualize import (
+    SEVERITY_CLASSES,
+    create_folium_overlay,
+    create_sentinel_overlay,
+    create_severity_overlay,
+)
 
 st.set_page_config(
     page_title="Wildfire Burn Scar Detection",
     layout="wide",
 )
 
-REGION = {
-    "display_name": "Woolsey Fire (2018)",
-    "name": "woolsey_fire_2018",
-    "center": [34.16, -118.83],
-    "zoom": 11,
-    "description": (
-        "Burned 96,949 acres across Ventura and Los Angeles counties, "
-        "destroying over 1,600 structures and threatening Malibu and Calabasas. "
-        "November 2018."
-    ),
-    "acres": "96,949",
-    "date": "November 2018",
+REGIONS = {
+    "woolsey_fire_2018": {
+        "display_name": "Woolsey Fire (2018)",
+        "name": "woolsey_fire_2018",
+        "center": [34.16, -118.83],
+        "zoom": 11,
+        "description": (
+            "Burned 96,949 acres across Ventura and Los Angeles counties, "
+            "destroying over 1,600 structures and threatening Malibu and Calabasas. "
+            "November 2018."
+        ),
+        "acres": "96,949",
+        "date": "November 2018",
+        "setting": "Southern California chaparral",
+    },
+    "east_troublesome_2020": {
+        "display_name": "East Troublesome Fire (2020)",
+        "name": "east_troublesome_2020",
+        "center": [40.25, -105.85],
+        "zoom": 10,
+        "description": (
+            "Burned 193,812 acres in Grand County, Colorado — among the largest fires "
+            "in state history. Grew explosively in October 2020, forcing evacuations "
+            "near Grand Lake and Rocky Mountain National Park."
+        ),
+        "acres": "193,812",
+        "date": "October 2020",
+        "setting": "Colorado subalpine forest",
+    },
+    "thomas_fire_2017": {
+        "display_name": "Thomas Fire (2017)",
+        "name": "thomas_fire_2017",
+        "center": [34.48, -119.25],
+        "zoom": 10,
+        "description": (
+            "Burned 281,893 acres across Ventura and Santa Barbara counties over "
+            "several weeks — among the largest California wildfires on record at the "
+            "time. December 2017."
+        ),
+        "acres": "281,893",
+        "date": "December 2017",
+        "setting": "California coastal sage & chaparral",
+    },
 }
+
+DEFAULT_REGION = "woolsey_fire_2018"
 
 TRAIN_FIRES = [
     "August Complex (2020)",
     "Mendocino Complex (2018)",
     "SCU Lightning Complex (2020)",
-    "Creek Fire (2020)",
+    "Caldor (2021)",
     "LNU Lightning Complex (2020)",
-    "Thomas Fire (2017)",
-    "Caldor Fire (2021)",
-    "Antelope Fire (2021)",
+    "North Complex (2020)",
+    "Carr (2018)",
+    "Dixie (2021)",
+    "Antelope (2021)",
+    "Holy (2018)",
+    "Bobcat (2020)",
+    "Bootleg (2021, OR)",
+    "Hermits Peak (2022, NM)",
+    "Pearl Hill (2020, WA)",
 ]
 
 
 HF_REPO = "evankart/burn-scar-detection-data"
 
 
-def load_prediction() -> dict | None:
-    pred_path = Path(f"data/predictions/{REGION['name']}.npz")
+@st.cache_data(show_spinner=False)
+def load_prediction(region_name: str) -> dict | None:
+    pred_path = Path(f"data/predictions/{region_name}.npz")
     if not pred_path.exists():
         with st.spinner("Downloading predictions from HuggingFace Hub…"):
             try:
@@ -59,7 +104,7 @@ def load_prediction() -> dict | None:
                 hf_hub_download(
                     repo_id=HF_REPO,
                     repo_type="dataset",
-                    filename=f"predictions/{REGION['name']}.npz",
+                    filename=f"predictions/{region_name}.npz",
                     local_dir="data",
                 )
             except Exception as e:
@@ -70,12 +115,13 @@ def load_prediction() -> dict | None:
         "pred_mask": data["pred_mask"],
         "true_mask": data["true_mask"],
         "image": data["image"],
+        "dnbr": data["dnbr"] if "dnbr" in data else None,
         "bounds": data["bounds"].tolist(),
     }
 
 
-def create_map(pred_data: dict | None, overlay_opacity: float) -> folium.Map:
-    m = folium.Map(location=REGION["center"], zoom_start=REGION["zoom"], tiles=None)
+def create_map(region: dict, pred_data: dict | None, overlay_opacity: float) -> folium.Map:
+    m = folium.Map(location=region["center"], zoom_start=region["zoom"], tiles=None)
     if pred_data is not None:
         m.fit_bounds(pred_data["bounds"])
 
@@ -86,7 +132,7 @@ def create_map(pred_data: dict | None, overlay_opacity: float) -> folium.Map:
         name="Satellite",
     ).add_to(m)
 
-    perimeter_path = Path("data/perimeters/woolsey_fire_2018.geojson")
+    perimeter_path = Path(f"data/perimeters/{region['name']}.geojson")
     if perimeter_path.exists():
         folium.GeoJson(
             json.loads(perimeter_path.read_text()),
@@ -97,6 +143,12 @@ def create_map(pred_data: dict | None, overlay_opacity: float) -> folium.Map:
 
     if pred_data is not None:
         create_sentinel_overlay(pred_data["image"], pred_data["bounds"]).add_to(m)
+        if pred_data.get("dnbr") is not None:
+            # Ground-truth burn-severity gradient; off by default so it doesn't
+            # stack on the model prediction — toggle it on via the layer control.
+            create_severity_overlay(
+                pred_data["dnbr"], pred_data["bounds"], show=False
+            ).add_to(m)
         create_folium_overlay(
             pred_data["pred_mask"], pred_data["bounds"], opacity=overlay_opacity
         ).add_to(m)
@@ -113,19 +165,26 @@ def main():
     st.title("Wildfire Burn Scar Detection")
     st.caption(
         "Prithvi-EO-1.0-100M geospatial foundation model (IBM × NASA) "
-        "fine-tuned on 8 California wildfires, evaluated on the Woolsey Fire."
+        "fine-tuned on 12 wildfires across 4 US states, evaluated on 3 held-out fires."
     )
-
-    pred_data = load_prediction()
 
     overlay_opacity = 0.6
 
     # --- Sidebar ---
     with st.sidebar:
-        st.subheader(REGION["display_name"])
-        st.caption(REGION["date"])
-        st.markdown(REGION["description"])
-        st.markdown(f"**Area burned:** {REGION['acres']} acres")
+        region_key = st.selectbox(
+            "Held-out test fire",
+            options=list(REGIONS.keys()),
+            index=list(REGIONS.keys()).index(DEFAULT_REGION),
+            format_func=lambda k: REGIONS[k]["display_name"],
+        )
+        region = REGIONS[region_key]
+        pred_data = load_prediction(region["name"])
+
+        st.subheader(region["display_name"])
+        st.caption(f"{region['date']} · {region['setting']}")
+        st.markdown(region["description"])
+        st.markdown(f"**Area burned:** {region['acres']} acres")
 
         st.divider()
 
@@ -143,8 +202,9 @@ def main():
 
             st.subheader("Results")
             st.caption(
-                "The model was trained on 8 other California wildfires and has never "
-                "seen the Woolsey Fire. These numbers reflect how well it generalises."
+                f"The model was trained on 12 wildfires across 4 US states and has "
+                f"never seen the {region['display_name']}. These numbers reflect how "
+                f"well it generalises to unseen terrain."
             )
 
             c1, c2, c3 = st.columns(3)
@@ -171,10 +231,26 @@ def main():
             st.markdown(f"**Model detected:** {pred.sum() / total * 100:.1f}% of scene burned")
             st.markdown(f"**dNBR reference:** {true.sum() / total * 100:.1f}% of scene burned")
 
+            if pred_data.get("dnbr") is not None:
+                st.divider()
+                st.markdown("**dNBR burn severity**")
+                st.caption("Ground-truth severity gradient — toggle the layer on the map.")
+                swatches = []
+                for label, lo, hi, color in SEVERITY_CLASSES:
+                    hi_txt = "∞" if hi == float("inf") else f"{hi:.2f}"
+                    swatches.append(
+                        f"<div style='display:flex;align-items:center;margin:2px 0;'>"
+                        f"<span style='width:14px;height:14px;background:{color};"
+                        f"display:inline-block;margin-right:8px;border:1px solid #999;'></span>"
+                        f"<span style='font-size:0.85rem;'>{label} ({lo:.2f}–{hi_txt})</span>"
+                        f"</div>"
+                    )
+                st.markdown("".join(swatches), unsafe_allow_html=True)
+
         else:
             st.info(
                 "Predictions not yet available.\n\n"
-                "```bash\npython run_inference.py --region woolsey_fire_2018\n```"
+                f"```bash\npython run_inference.py --region {region['name']}\n```"
             )
 
         st.divider()
@@ -182,13 +258,13 @@ def main():
 
     # --- Map ---
     with st.spinner("Loading satellite imagery..."):
-        m = create_map(pred_data, overlay_opacity)
+        m = create_map(region, pred_data, overlay_opacity)
     st_folium(m, use_container_width=True, height=560, returned_objects=[])
 
     # --- Comparison plot ---
     st.subheader("Prediction Comparison")
     st.caption(
-        "Sentinel-2 RGB  ·  dNBR ground truth  ·  model prediction  ·  overlay. "
+        "HLS RGB  ·  dNBR ground truth  ·  model prediction  ·  overlay. "
         "The model sees only post-fire imagery — no before/after comparison is made at inference time."
     )
 
@@ -200,9 +276,9 @@ def main():
             pred_data["image"],
             pred_data["true_mask"],
             pred_data["pred_mask"],
-            title=REGION["display_name"],
+            title=region["display_name"],
         )
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, width="stretch")
         plt.close(fig)
     else:
         st.info("Run inference to generate the comparison plot.")
@@ -212,8 +288,8 @@ def main():
         st.markdown(f"""
         #### Data
 
-        Sentinel-2 L2A satellite imagery with 6 spectral bands (Blue, Green, Red, NIR, SWIR1, SWIR2)
-        downloaded from [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/).
+        Harmonized Landsat Sentinel-2 (HLS) imagery with 6 spectral bands (Blue, Green, Red, NIR, SWIR1, SWIR2)
+        downloaded from [NASA Earthdata](https://www.earthdata.nasa.gov/).
         For each fire, two scenes are fetched: one before the fire and one after, selecting the
         lowest cloud-cover acquisition within the relevant date window.
 
@@ -226,8 +302,8 @@ def main():
         > `dNBR = NBR_before − NBR_after`
 
         Burned vegetation absorbs less NIR and reflects more SWIR than healthy plants, so dNBR spikes
-        sharply where fire passed. Any pixel where `dNBR > 0.27` is classified as burned — the USGS
-        threshold for moderate-to-high severity burns.
+        sharply where fire passed. Any pixel where `dNBR > 0.10` is classified as burned — the USGS
+        low-severity threshold, capturing light scorching through to complete burns.
 
         #### Model
 
@@ -236,27 +312,29 @@ def main():
         (HLS) scenes — a globally representative dataset spanning all seasons and land cover types.
         The encoder learns rich spectral-spatial representations of Earth's surface.
 
-        For burn scar detection, the Prithvi encoder (frozen) is paired with a lightweight CNN
-        decoder. Each 224×224 image patch is:
-        1. Passed through the 12-layer ViT encoder → 588 patch tokens of 768 dimensions
-        2. Mean-pooled over the spatial grid → 14×14 feature map
-        3. Upsampled by the CNN decoder (4× bilinear stages) → per-pixel burn probability
+        For burn scar detection, the Prithvi encoder is paired with an FPN (Feature Pyramid
+        Network) decoder. Each 224×224 image patch is:
+        1. Passed through the 12-layer ViT encoder
+        2. Features extracted from layers 3, 5, 8, and 12 (evenly spaced to capture both
+           fine spectral detail and high-level semantic patterns)
+        3. Fused via top-down lateral connections (FPN) into a single 14×14 feature map
+        4. Upsampled by the decoder (4× transposed-conv stages) → per-pixel burn probability
 
-        Prithvi's patch embeddings naturally separate burned from unburned land in its
-        representation space — evidence the foundation model has learned spectral features
-        that transfer to fire detection without task-specific supervision.
+        Tapping multiple encoder layers improves boundary precision — early layers retain
+        spectral/texture detail that deeper layers abstract away.
         Reference: [arXiv:2310.18660](https://arxiv.org/abs/2310.18660)
 
         #### Train / test split
 
-        Trained on 8 large California wildfires:
+        Trained on 12 wildfires across 4 US states (CA, OR, NM, WA):
         {", ".join(TRAIN_FIRES)}.
 
-        The Woolsey Fire is held out entirely — no Woolsey patches appear during training or
-        validation. This gives a realistic measure of generalisation to an unseen fire.
+        Three fires are held out entirely for evaluation: Woolsey (2018, CA chaparral),
+        East Troublesome (2020, CO subalpine), and Thomas (2017, CA coast). No held-out
+        patches appear during training or validation.
 
-        Full scenes are sliced into 224×224 px patches (50% overlap). Patches with at least 1%
-        burned pixels are always kept; background-only patches are sampled at 30% to reduce class
+        Full scenes are sliced into 224×224 px patches (75% overlap). Patches with at least 1%
+        burned pixels are always kept; background-only patches are sampled at 60% to reduce class
         imbalance.
         """)
 

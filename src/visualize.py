@@ -11,6 +11,16 @@ from matplotlib.patches import Patch
 
 BURN_CMAP = mcolors.ListedColormap(["#2d6a4f", "#d62828"])  # green=bg, red=burn
 
+# USGS dNBR burn-severity classes (Key & Benson). Each entry is
+# (label, dnbr_low_inclusive, dnbr_high_exclusive, hex_color). Pixels below the
+# lowest break (dNBR < 0.10) are unburned/regrowth and render transparent.
+SEVERITY_CLASSES = [
+    ("Low", 0.10, 0.27, "#ffffb2"),
+    ("Moderate-low", 0.27, 0.44, "#fecc5c"),
+    ("Moderate-high", 0.44, 0.66, "#fd8d3c"),
+    ("High", 0.66, float("inf"), "#bd0026"),
+]
+
 
 def plot_predictions(
     image: np.ndarray,
@@ -23,7 +33,7 @@ def plot_predictions(
     Side-by-side plot: RGB composite | dNBR | prediction | overlay.
 
     Args:
-        image: (C, H, W) normalized Sentinel-2 bands (uses B4, B3, B2 for RGB)
+        image: (C, H, W) normalized HLS bands (uses B4, B3, B2 for RGB)
         true_mask: (H, W) ground truth mask
         pred_mask: (H, W) predicted mask
         title: figure title
@@ -35,7 +45,7 @@ def plot_predictions(
     rgb = _percentile_stretch(rgb)
     rgb = np.nan_to_num(rgb, nan=0.0)
     axes[0].imshow(rgb)
-    axes[0].set_title("Sentinel-2 RGB")
+    axes[0].set_title("HLS RGB")
 
     axes[1].imshow(true_mask, cmap=BURN_CMAP, vmin=0, vmax=1, interpolation="nearest")
     axes[1].set_title("dNBR Burn Severity")
@@ -126,10 +136,10 @@ def create_sentinel_overlay(
     max_size: int = 1024,
 ):
     """
-    Create a Folium ImageOverlay showing Sentinel-2 RGB imagery.
+    Create a Folium ImageOverlay showing HLS RGB imagery.
 
     Args:
-        image: (C, H, W) Sentinel-2 bands (may be Prithvi z-score normalized)
+        image: (C, H, W) HLS bands (may be Prithvi z-score normalized)
         bounds: [[south, west], [north, east]] lat/lon bounds
         max_size: downsample so the longer dimension is at most this many pixels
     """
@@ -165,7 +175,7 @@ def create_sentinel_overlay(
         image=rgba,
         bounds=bounds,
         opacity=1.0,
-        name="Sentinel-2 RGB",
+        name="HLS RGB",
     )
 
 
@@ -193,4 +203,55 @@ def create_folium_overlay(
         bounds=bounds,
         opacity=1.0,
         name="Burn Scar Predictions",
+    )
+
+
+def create_severity_overlay(
+    dnbr: np.ndarray,
+    bounds: list[list[float]],
+    opacity: float = 0.7,
+    max_size: int = 1024,
+    show: bool = True,
+):
+    """
+    Create a Folium ImageOverlay coloring dNBR by USGS burn-severity class.
+
+    Args:
+        dnbr: (H, W) continuous dNBR array (NaN = nodata)
+        bounds: [[south, west], [north, east]] lat/lon bounds
+        opacity: alpha applied to colored (burned) pixels; unburned stays clear
+        max_size: downsample so the longer dimension is at most this many pixels
+    """
+    import folium
+
+    alpha = int(255 * opacity)
+    rgba = np.zeros((*dnbr.shape, 4), dtype=np.uint8)
+    for _, low, high, hexcol in SEVERITY_CLASSES:
+        r, g, b = (np.array(mcolors.to_rgb(hexcol)) * 255).astype(np.uint8)
+        # NaN compares False, so nodata never matches and stays transparent.
+        sel = (dnbr >= low) & (dnbr < high)
+        rgba[sel] = [r, g, b, alpha]
+
+    h, w = rgba.shape[:2]
+    if max(h, w) > max_size:
+        scale = max_size / max(h, w)
+        new_h, new_w = int(h * scale), int(w * scale)
+        try:
+            from PIL import Image as PILImage
+            # NEAREST: severity classes are categorical, do not interpolate.
+            pil_img = PILImage.fromarray(rgba, mode="RGBA").resize(
+                (new_w, new_h), PILImage.NEAREST
+            )
+            rgba = np.array(pil_img)
+        except ImportError:
+            step_y = max(1, h // new_h)
+            step_x = max(1, w // new_w)
+            rgba = rgba[::step_y, ::step_x]
+
+    return folium.raster_layers.ImageOverlay(
+        image=rgba,
+        bounds=bounds,
+        opacity=1.0,
+        name="dNBR Burn Severity",
+        show=show,
     )

@@ -1,0 +1,186 @@
+# Burn Scar Detection - Balanced Configuration
+# Fine-tunes the Prithvi encoder (unfreeze after epoch 3) AND removes the
+# burn-class bias that made the encoder over-predict on out-of-distribution
+# test fires (recall pinned >90%, precision the bottleneck). Two changes vs.
+# finetune_config: balanced class weights (was [0.3, 0.7]) and more background
+# patches retained (background_keep 0.6 vs 0.3) so the model practices
+# predicting "unburned". Goal: a single decision threshold (~0.5) that
+# transfers from training scenes to held-out fires.
+
+data:
+  bands: ["B02", "B03", "B04", "B8A", "B11", "B12"]
+  patch_size: 224
+  train_split: 0.9
+  num_workers: 4
+  cache_dir: "./data/cache"
+  dnbr_threshold: 0.10  # see train_config.yaml — train/eval must match
+  # Decision threshold on burn-class probability. Calibrated by maximizing
+  # pooled micro-IoU over held-OUT-of-test TRAINING scenes (caldor, carr,
+  # north_complex, dixie, lnu) — never tuned on the test fires. Balanced class
+  # weights normalized the probability scale so the optimum sits at ~0.5.
+  pred_threshold: 0.5
+  # Fraction of pure-background (no-burn) patches kept during training. Higher
+  # than the 0.3 default so the model sees enough true negatives to stop
+  # over-predicting burn on unfamiliar terrain.
+  background_keep: 0.6
+  # Cap patches per fire. With the nodata-imputation fix, mega-fires (e.g. the
+  # 70 km August Complex) would otherwise yield thousands of windows and
+  # dominate both the dataset and training time.
+  max_patches_per_region: 500
+
+  test_regions:
+    - name: "woolsey_fire_2018"
+      lat: 34.16
+      lon: -118.83
+      buffer_km: 20
+      pre_fire_date: "2018-10-01"
+      post_fire_date: "2018-11-20"
+
+    - name: "east_troublesome_2020"
+      lat: 40.15
+      lon: -105.85
+      buffer_km: 30
+      pre_fire_date: "2020-08-01"
+      post_fire_date: "2020-11-15"
+
+    - name: "thomas_fire_2017"
+      lat: 34.50
+      lon: -119.10
+      buffer_km: 45
+      pre_fire_date: "2017-09-01"
+      post_fire_date: "2018-01-15"
+      # 45 km buffer spans >1 MGRS tile; single-tile lock left ~85% nodata
+      # (only 15% valid pixels). Mosaic across tiles for full scene coverage.
+      allow_multitile: true
+
+  train_regions:
+    - name: "august_complex_2020"
+      lat: 40.00
+      lon: -122.60
+      buffer_km: 70
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-11-15"
+
+    - name: "mendocino_complex_2018"
+      lat: 39.25
+      lon: -122.70
+      buffer_km: 55
+      pre_fire_date: "2018-05-01"
+      post_fire_date: "2018-10-01"
+
+    - name: "scu_lightning_complex_2020"
+      lat: 37.55
+      lon: -121.45
+      buffer_km: 45
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-10-15"
+
+    - name: "caldor_fire_2021"
+      lat: 38.73
+      lon: -120.30
+      buffer_km: 20
+      pre_fire_date: "2021-07-01"
+      post_fire_date: "2021-10-01"
+
+    - name: "lnu_lightning_complex_2020"
+      lat: 38.60
+      lon: -122.20
+      buffer_km: 45
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-10-15"
+
+    - name: "north_complex_2020"
+      lat: 39.75
+      lon: -121.30
+      buffer_km: 40
+      pre_fire_date: "2020-05-01"
+      post_fire_date: "2020-12-15"
+
+    - name: "carr_fire_2018"
+      lat: 40.65
+      lon: -122.65
+      buffer_km: 35
+      pre_fire_date: "2018-04-01"
+      post_fire_date: "2018-09-15"
+
+    - name: "dixie_fire_2021"
+      lat: 40.32
+      lon: -120.86
+      buffer_km: 40
+      pre_fire_date: "2021-06-01"
+      post_fire_date: "2021-10-15"
+
+    - name: "antelope_fire_2021"
+      lat: 40.40
+      lon: -120.20
+      buffer_km: 35
+      pre_fire_date: "2021-04-01"
+      post_fire_date: "2021-09-01"
+
+    - name: "bootleg_fire_2021"
+      lat: 42.60
+      lon: -121.35
+      buffer_km: 50
+      pre_fire_date: "2021-05-01"
+      post_fire_date: "2021-08-20"
+
+    - name: "hermits_peak_2022"
+      lat: 35.80
+      lon: -105.50
+      buffer_km: 40
+      pre_fire_date: "2022-02-01"
+      post_fire_date: "2022-07-01"
+
+    - name: "pearl_hill_2020"
+      lat: 47.95
+      lon: -119.67
+      buffer_km: 40
+      pre_fire_date: "2020-07-01"
+      post_fire_date: "2020-09-15"
+
+    # --- SoCal chaparral fires: added to close the domain gap that made the
+    # model flood Woolsey (chaparral) with 2.2x over-prediction. Both post-2015
+    # (HLS era) and well clear of the Woolsey/Thomas test footprints. ---
+    - name: "holy_fire_2018"
+      lat: 33.69
+      lon: -117.53
+      buffer_km: 20
+      pre_fire_date: "2018-06-15"
+      post_fire_date: "2018-09-20"
+      allow_multitile: true
+
+    - name: "bobcat_fire_2020"
+      lat: 34.26
+      lon: -117.87
+      buffer_km: 30
+      pre_fire_date: "2020-07-15"
+      post_fire_date: "2020-10-25"
+      allow_multitile: true
+
+model:
+  num_classes: 2
+  in_channels: 6
+  freeze_backbone: true
+  unfreeze_after_epoch: 3
+
+training:
+  batch_size: 16
+  epochs: 12
+  learning_rate: 3.0e-4
+  backbone_lr_multiplier: 0.05
+  weight_decay: 0.01
+  warmup_epochs: 1
+  early_stopping_patience: 4
+  mixed_precision: true
+  seed: 42
+  class_weights: [0.5, 0.5]
+  augmentations:
+    random_flip: true
+    random_rotate: true
+    random_crop: true
+    color_jitter: false
+
+logging:
+  project_name: "burn-scar-detection-balanced"
+  log_every_n_steps: 10
+  metric_monitor: "val_mean_iou"
