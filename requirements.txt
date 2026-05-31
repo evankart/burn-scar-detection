@@ -13,6 +13,7 @@ earthaccess>=0.9.0
 # Geospatial stack — needed for live custom-area detection (HLS download + inference)
 rioxarray>=0.15.0
 xarray>=2024.1.0
+rasterio>=1.3.0
 pyproj>=3.6.0
 shapely>=2.0.0
 h5netcdf>=1.3.0
