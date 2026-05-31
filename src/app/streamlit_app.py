@@ -3,23 +3,21 @@ Streamlit app for interactive burn scar detection visualization.
 """
 
 import json
+import math
 import sys
+from datetime import date
 from pathlib import Path
 
-import math
-from datetime import date
+# Ensure repo root is on sys.path BEFORE any src.* imports.
+# Needed on HF Spaces where app_file = src/app/streamlit_app.py and
+# the working directory is the Space root, not the package root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import folium
 import numpy as np
 import streamlit as st
 from folium.plugins import Draw, Geocoder
 from streamlit_folium import st_folium
-
-# Make the repo root importable so `from src...` works regardless of launch dir
-# (e.g. on Hugging Face Spaces, where app_file is src/app/streamlit_app.py).
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.visualize import (
     SEVERITY_CLASSES,
