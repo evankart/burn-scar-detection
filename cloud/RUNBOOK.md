@@ -8,7 +8,8 @@ disposable: it trains, uploads the checkpoint to S3, and self-terminates.
 - S3 bucket `burn-scar-detection` (us-west-2) — results land here.
 - EC2 key pair `burn-scar-detection` (us-west-2) — `~/Downloads/burn-scar-detection.pem`.
 - GPU quota: "Running On-Demand G instances" in us-west-2 ≥ 4 (request pending until approved).
-- Code pushed to GitHub `main` (the instance clones it).
+- Code pushed to GitHub branch `cloud-deploy` (the instance clones this branch;
+  `main` still holds the original code until this is merged).
 
 ## Launch (once the GPU quota is approved)
 A `g5.xlarge` (1× A10G, 24 GB) on the Deep Learning OSS PyTorch AMI. Either let
@@ -23,7 +24,7 @@ chmod 400 ~/Downloads/burn-scar-detection.pem            # once, locally
 ssh -i ~/Downloads/burn-scar-detection.pem ubuntu@<INSTANCE_PUBLIC_IP>
 
 # on the instance:
-git clone https://github.com/evankart/burn-scar-detection.git
+git clone -b cloud-deploy https://github.com/evankart/burn-scar-detection.git
 cd burn-scar-detection
 export EARTHDATA_USER='<your earthdata login>'
 export EARTHDATA_PASS='<your earthdata password>'
