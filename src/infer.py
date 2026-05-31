@@ -53,6 +53,18 @@ def load_model(checkpoint: str = "checkpoints/balanced_chaparral/best_model.pt",
     return model, device, cfg
 
 
+def _granule_date(granule) -> str:
+    """Parse the acquisition date from an HLS granule native-id, e.g.
+    HLS.S30.T11SLT.2018327T184709.v2.0 -> '2018-11-23'."""
+    try:
+        nid = granule.get("meta", {}).get("native-id", "")
+        token = nid.split(".")[3]          # '2018327T184709'
+        year, doy = int(token[:4]), int(token[4:7])
+        return (datetime(year, 1, 1) + timedelta(days=doy - 1)).strftime("%Y-%m-%d")
+    except Exception:
+        return "unknown"
+
+
 def _bounds_latlon(post_ds) -> list:
     """4-corner densified UTM->WGS84 bbox (encloses the rotated footprint)."""
     from pyproj import Transformer
@@ -87,6 +99,8 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if not granules:
         raise ValueError("No clear HLS scene found for that area within ~30 days of "
                          "the date. Try another date or location.")
+    # search_scenes sorts least-cloudy first → granules[0] is the primary scene.
+    scene_date = _granule_date(granules[0])
     post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
 
     image = normalize_bands(post_ds, bands)  # brightness gain applied here
@@ -147,4 +161,5 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         "bounds": _bounds_latlon(post_ds),
         "burned_frac": burned_frac,
         "n_scenes": len(granules),
+        "scene_date": scene_date,
     }

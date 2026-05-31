@@ -240,8 +240,9 @@ def custom_detection_view():
         st.error(f"Could not run detection: {e}")
         return
 
-    st.success(f"Detected burn scar over ~{res['burned_frac'] * 100:.1f}% of the area "
-               f"(merged {res['n_scenes']} HLS scene(s)).")
+    st.success(f"Detected burn scar over ~{res['burned_frac'] * 100:.1f}% of the area.")
+    st.caption(f"Imagery: least-cloudy HLS acquired **{res['scene_date']}** "
+               f"(searched ≤30 days after your date; composited from {res['n_scenes']} scene(s)).")
     s, w = res["bounds"][0]; n, e = res["bounds"][1]
     rm = folium.Map(location=[(s + n) / 2, (w + e) / 2], zoom_start=10, tiles=None)
     rm.fit_bounds(res["bounds"])
