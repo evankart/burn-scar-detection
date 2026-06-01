@@ -14,7 +14,7 @@ HLS (6 bands, 30m) → brightness gain → Prithvi-EO ViT encoder → FPN decode
                                           pretrained on 640k HLS)       trained from scratch)
 ```
 
-- **Encoder**: [Prithvi-EO-1.0-100M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M) — 12-layer ViT pretrained by IBM/NASA on HLS. Frozen at inference; features tapped from layers 3, 5, 8, 12.
+- **Encoder**: [Prithvi-EO-1.0-100M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M) — 12-layer ViT pretrained by IBM/NASA on HLS. Frozen at inference; features tapped from encoder blocks [2, 4, 7, 11] (0-indexed).
 - **Decoder**: FPN-style decoder fusing multi-scale encoder features via top-down lateral connections, then upsampling 14×14 → 224×224 in four transposed-conv stages.
 - **Labels**: Auto-derived from dNBR (dNBR = NBR_pre − NBR_post, threshold 0.10). No manual annotation.
 - **Data**: HLS from [NASA Earthdata](https://www.earthdata.nasa.gov/) via `earthaccess`.
@@ -29,8 +29,8 @@ Effect: Woolsey IoU **0.53 → 0.73**, macro IoU **0.54 → 0.64**.
 ### What didn't work (documented honestly)
 Asymmetric Tversky loss, threshold recalibration, encoder fine-tuning (overfit on small data), and SoCal hard-negative data all failed to beat the frozen + brightness-corrected baseline on the held-out fires. Full writeup: [`results/over_prediction_analysis.md`](results/over_prediction_analysis.md).
 
-### Encoder fine-tuning
-Layer-wise LR decay + gradual unfreeze infrastructure is implemented (`src/train.py`), and a 37-fire expanded dataset is downloaded and verified. A cloud-based fine-tune run is pending AWS GPU quota approval — the infrastructure is ready (`cloud/RUNBOOK.md`).
+### Encoder fine-tuning (staged)
+A **Prithvi-EO-2.0-300M** fine-tune is staged (`configs/finetune_config.yaml`): layer-wise LR decay + gradual unfreeze (`src/train.py`), a fire-based validation split, and the 37-fire dataset. The 2.0 normalization stats and any brightness gain are verified first by `scripts/band_stats_v2.py`. The cloud run is pending AWS GPU quota approval — infrastructure is ready (`cloud/RUNBOOK.md`). Not yet trained/evaluated; the deployed model remains the frozen 1.0 + gain baseline.
 
 ## Project structure
 
