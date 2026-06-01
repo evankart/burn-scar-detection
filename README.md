@@ -100,10 +100,7 @@ configs/
 scripts/
   eval_sweep.py          evaluate checkpoints on the held-out fires (fixed threshold)
   calibrate_threshold.py honest threshold calibration on train fires only
-  brightness_diag.py     1.0 brightness-correction diagnostic (the over-prediction fix)
   band_stats_v2.py       2.0 brightness/scale diagnostic (run before the 2.0 fine-tune)
-  compare_experiments.py frozen vs fine-tuned comparison plots
-  batch_download_fires.py bulk HLS download for the training set
   push_to_space.py       deploy all files to the HF Space
 cloud/
   run_job.sh             self-terminating AWS GPU job (download → diagnose → train → upload)
