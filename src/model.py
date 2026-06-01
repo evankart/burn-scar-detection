@@ -37,11 +37,15 @@ PRITHVI_VERSIONS = {
         "depth":       24,
         "num_heads":   16,
         "num_frames":  4,
-        # Pretraining stats (raw DN / 10000), from Prithvi-EO-2.0-300M config.
+        # Pretraining stats (raw DN / 10000), from Prithvi-EO-2.0-300M config,
+        # in the order Blue, Green, Red, NIR, SWIR1, SWIR2.
         "mean": [0.10870, 0.13420, 0.14330, 0.27340, 0.19580, 0.13630],
         "std":  [0.22480, 0.21790, 0.21780, 0.18500, 0.12420, 0.10490],
         "feature_layers": [5, 11, 17, 23],  # FPN taps, every 6th of depth 24
-        "bands": ["B02", "B03", "B04", "B05", "B06", "B07"],
+        # Same 6 physical HLS bands as 1.0. The 2.0 config.json labels NIR/SWIR1/
+        # SWIR2 with Landsat names (B05/B06/B07); against HLSS30 we read the
+        # equivalent Sentinel names B8A/B11/B12.
+        "bands": ["B02", "B03", "B04", "B8A", "B11", "B12"],
     },
 }
 

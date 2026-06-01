@@ -32,11 +32,12 @@ def run_inference(
     dnbr_threshold: float = 0.10,
     pred_threshold: float = 0.4,
     return_prob: bool = False,
+    prithvi_version: str = "1.0",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sliding-window inference on a full scene. Returns (pred_mask, true_mask,
     image); with return_prob=True also appends the pre-threshold probability map.
     dnbr_threshold must match the training-label value. See docs/METHODOLOGY.md."""
-    image = normalize_bands(post_ds, bands)
+    image = normalize_bands(post_ds, bands, prithvi_version=prithvi_version)
     true_mask = generate_burn_mask(pre_ds, post_ds, dnbr_threshold=dnbr_threshold)
 
     _, h, w = image.shape
