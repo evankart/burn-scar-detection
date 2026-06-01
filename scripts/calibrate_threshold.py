@@ -1,10 +1,6 @@
 """
-Calibrate the decision threshold on the TRAINING fires only (never the held-out
-test fires), to avoid leakage. Picks the threshold that maximizes mean per-fire
+Calibrate the decision threshold on the TRAINING fires only. Picks the threshold that maximizes mean per-fire
 IoU on the train set; that value is then deployed unchanged to the test fires.
-
-Mirrors the production pipeline exactly: same sliding-window inference
-(run_inference, return_prob=True) and the same NDWI water exclusion.
 """
 import argparse
 import sys
@@ -41,8 +37,11 @@ def main():
     dnbr_t = cfg["data"].get("dnbr_threshold", 0.10); cache = cfg["data"]["cache_dir"]
     device = get_device()
 
-    model = BurnScarModel(num_classes=cfg["model"]["num_classes"], in_channels=cfg["model"]["in_channels"])
-    model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model_state_dict"])
+    state = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    ck_ver = state.get("config", {}).get("model", {}).get("prithvi_version", "1.0")
+    model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
+                          in_channels=cfg["model"]["in_channels"], prithvi_version=ck_ver)
+    model.load_state_dict(state["model_state_dict"])
     model = model.to(device)
 
     train = cfg["data"]["train_regions"]; test = cfg["data"]["test_regions"]
@@ -57,7 +56,8 @@ def main():
             pre = _restore_crs(xr.open_dataset(pp, engine="h5netcdf"))
             post = _restore_crs(xr.open_dataset(qp, engine="h5netcdf")).rio.reproject_match(pre)
             _, true, image, prob = run_inference(model, post, pre, bands=bands, patch_size=ps,
-                                                  device=device, dnbr_threshold=dnbr_t, return_prob=True)
+                                                  device=device, dnbr_threshold=dnbr_t,
+                                                  return_prob=True, prithvi_version=ck_ver)
             w = water_mask(post)
             if w.shape == prob.shape:
                 prob = prob.copy(); true = true.copy()

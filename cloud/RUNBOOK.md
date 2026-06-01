@@ -4,8 +4,9 @@ Run the heavy **Prithvi-EO-2.0-300M** encoder fine-tune (`configs/finetune_confi
 experiment `finetune_v2`) on a GPU instance co-located with the NASA HLS archive
 (us-west-2 → direct-S3 reads, fast in-region downloads). The instance is
 disposable: it downloads HLS, runs the brightness diagnostic, trains, uploads the
-checkpoint to S3, and self-terminates. `run_job.sh` re-downloads the fires with
-the 2.0 band set (B05/B06/B07).
+checkpoint to S3, and self-terminates. Prithvi 2.0 uses the same physical HLS
+bands as 1.0, so existing caches are reused — `run_job.sh` only downloads fires
+not already cached.
 
 ## One-time setup (already done)
 - S3 bucket `burn-scar-detection` (us-west-2) — results land here.
