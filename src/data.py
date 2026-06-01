@@ -1,8 +1,7 @@
 """
 HLS data pipeline: download, preprocessing, and PyTorch dataset.
 
-Uses NASA Earthdata's Harmonized Landsat Sentinel-2 (HLS) product — the same
-data Prithvi-EO was pretrained on.
+Uses NASA Earthdata's Harmonized Landsat Sentinel-2 (HLS) product (same as data Prithvi-EO was pretrained on).
 """
 
 import logging
@@ -24,10 +23,7 @@ logger = logging.getLogger(__name__)
 HLS_COLLECTION = "HLSS30.v2.0"
 
 
-# ---------------------------------------------------------------------------
-# Download
-# ---------------------------------------------------------------------------
-
+# --- Download HLS Data ---
 class HLSDownloader:
     """Downloads and caches HLS imagery from NASA Earthdata."""
 
@@ -38,8 +34,7 @@ class HLSDownloader:
         self.bands = self.config["data"]["bands"]
         self.cache_dir = Path(self.config["data"]["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        # Auth: environment vars (EARTHDATA_USERNAME / EARTHDATA_PASSWORD — e.g.
-        # Hugging Face Spaces secrets) first, then ~/.netrc for local use.
+
         try:
             earthaccess.login(strategy="environment")
         except Exception:
@@ -81,9 +76,6 @@ class HLSDownloader:
             if not matched:
                 raise ValueError(f"Band {band} not found in granule assets")
 
-            # mask_and_scale: apply HLS scale_factor (0.0001) and decode the
-            # -9999 fill to NaN, yielding float surface reflectance. normalize_bands
-            # and the merge step both require float+NaN, not raw int16 DN.
             da = rioxarray.open_rasterio(matched[0], mask_and_scale=True)
             geom = box(*bbox)
             da = da.rio.clip([mapping(geom)], crs="EPSG:4326")
@@ -177,13 +169,6 @@ class HLSDownloader:
             mosaic = merge_arrays(per_band[band], bounds=bounds, res=(30.0, 30.0), nodata=np.nan)
             merged[band] = mosaic.squeeze(drop=True)
         out = xr.Dataset(merged).rio.write_crs(target_crs)
-        # Each band still carries encoding inherited from the int16 source COG.
-        # The critical key is dtype=int16: mask_and_scale decoded the data to
-        # float reflectance but left dtype/scale_factor in encoding, so to_netcdf
-        # would re-cast the floats back to int16 — and with scale_factor dropped
-        # that truncates all 0.0-0.5 reflectance to 0. Clear the band encoding
-        # and the stale CF attrs so bands save as plain float32 with NaN nodata,
-        # matching the other cached scenes.
         for band in self.bands:
             out[band].encoding.clear()
             for k in ("_FillValue", "scale_factor", "add_offset"):
@@ -196,21 +181,33 @@ class HLSDownloader:
         """Keep only granules from a specific MGRS tile."""
         return [g for g in granules if self._get_mgrs_tile(g) == tile_id]
 
+    def _cache_has_bands(self, path: Path) -> bool:
+        """True if the cached NetCDF contains every band in self.bands."""
+        try:
+            with xr.open_dataset(path, engine="h5netcdf") as ds:
+                return all(b in ds.variables for b in self.bands)
+        except Exception:
+            return False
+
     def download_region(self, region: dict) -> dict[str, Path]:
         name = region["name"]
         pre_path = self.cache_dir / f"{name}_pre.nc"
         post_path = self.cache_dir / f"{name}_post.nc"
 
         if pre_path.exists() and post_path.exists():
-            logger.info(f"Using cached data for {name}")
-            return {"pre": pre_path, "post": post_path}
+            # Band-validate the cache: Prithvi 1.0 caches store B8A/B11/B12, while
+            # 2.0 needs B05/B06/B07. A stale 1.0 NetCDF lacks the 2.0 bands and
+            # would KeyError downstream, so re-download if the requested bands are
+            # not all present (and vice versa).
+            if self._cache_has_bands(post_path) and self._cache_has_bands(pre_path):
+                logger.info(f"Using cached data for {name}")
+                return {"pre": pre_path, "post": post_path}
+            logger.info(
+                f"Cached {name} is missing requested bands {self.bands} — re-downloading"
+            )
 
         bbox = self._region_bbox(region["lat"], region["lon"], region["buffer_km"])
 
-        # When a buffer spans more than one MGRS tile, locking to a single tile
-        # leaves the rest of the scene as nodata. Opt-in mosaicking across tiles
-        # (the merge already reprojects every scene onto a common UTM grid) gives
-        # full coverage at the cost of mixing acquisition dates slightly.
         allow_multitile = region.get("allow_multitile", False)
 
         post_start = region["post_fire_date"]
@@ -270,9 +267,7 @@ class HLSDownloader:
         return results
 
 
-# ---------------------------------------------------------------------------
-# Preprocessing
-# ---------------------------------------------------------------------------
+# --- Preprocessing ---
 
 def _restore_crs(ds: xr.Dataset) -> xr.Dataset:
     """Restore CRS from spatial_ref variable after loading from NetCDF."""
@@ -350,29 +345,32 @@ def compute_dnbr(pre_ds: xr.Dataset, post_ds: xr.Dataset) -> np.ndarray:
     return dnbr.astype(np.float32)
 
 
-def normalize_bands(ds: xr.Dataset, bands: list[str]) -> np.ndarray:
+def normalize_bands(ds: xr.Dataset, bands: list[str],
+                    prithvi_version: str = "1.0") -> np.ndarray:
     """
     Stack and normalize HLS bands using Prithvi pretraining statistics.
+    Returns (C, H, W). prithvi_version selects normalization stats + gain.
 
-    HLS data from earthaccess is already in surface reflectance (0-1 scale).
-    Applies per-band z-score normalization with the mean/std from
-    Prithvi-EO-1.0-100M's HLS pretraining data. Returns (C, H, W).
+    Prithvi 1.0 (B02,B03,B04,B8A,B11,B12 — 0-1 reflectance):
+      A brightness gain is applied before z-scoring because HLS LaSRC output
+      runs ~1.4-1.9x darker than Prithvi 1.0's pretraining distribution.
+      This corrected Woolsey IoU from 0.53 → 0.73 (see over_prediction_analysis.md).
 
-    Brightness correction: HLS surface reflectance (LaSRC atmospheric correction
-    + BRDF normalization) runs systematically ~1.4-1.9x darker than the HLS
-    distribution Prithvi was pretrained on — most strongly in the visible bands.
-    Fed to the frozen Prithvi encoder, this dark input pushes features toward the
-    low-NIR "burn" signature and floods burn predictions (worst on dark SoCal
-    chaparral scenes). Each band is rescaled by a fixed GAIN, calibrated so the
-    pooled *training*-fire median reflectance matches the Prithvi pretraining mean
-    (no test data, no labels), bringing input back into the encoder's expected
-    range before z-scoring. This lifted held-out IoU substantially (e.g. Woolsey
-    0.53 -> ~0.75); see results/over_prediction_analysis.md.
+    Prithvi 2.0 (B02,B03,B04,B05,B06,B07 — different bands, different stats):
+      The 2.0 pretraining used raw DN / 10000, with per-band stats derived from
+      a much larger and more diverse dataset (4.2M scenes). No brightness gain
+      is applied for 2.0 — whether one is needed should be verified empirically.
     """
-    MEAN = [0.077523, 0.108099, 0.122859, 0.249720, 0.220421, 0.161083]
-    STD  = [0.128153, 0.127003, 0.139948, 0.136834, 0.129168, 0.115451]
-    # B02, B03, B04, B8A, B11, B12 (must match the config band order)
-    GAIN = [1.8793, 1.7172, 1.5741, 1.4097, 1.1295, 1.1276]
+    from src.model import PRITHVI_VERSIONS
+
+    vcfg = PRITHVI_VERSIONS[prithvi_version]
+    MEAN = vcfg["mean"]
+    STD  = vcfg["std"]
+
+    # Brightness gain for 1.0 only — calibrated so training-fire median
+    # reflectance matches the Prithvi 1.0 pretraining mean.
+    GAIN_1 = [1.8793, 1.7172, 1.5741, 1.4097, 1.1295, 1.1276]
+    GAIN = GAIN_1 if prithvi_version == "1.0" else [1.0] * len(bands)
 
     arrays = []
     for i, band in enumerate(bands):
@@ -447,6 +445,7 @@ def process_region(
     dnbr_threshold: float = 0.10,
     background_keep: float = 0.3,
     max_patches: int | None = None,
+    prithvi_version: str = "1.0",
 ) -> list[dict]:
     """Full preprocessing pipeline for a single region."""
     pre_ds = _restore_crs(xr.open_dataset(pre_path, engine="h5netcdf"))
@@ -454,7 +453,7 @@ def process_region(
     post_ds = post_ds.rio.reproject_match(pre_ds)
 
     mask = generate_burn_mask(pre_ds, post_ds, dnbr_threshold=dnbr_threshold)
-    image = normalize_bands(post_ds, bands)
+    image = normalize_bands(post_ds, bands, prithvi_version=prithvi_version)
     patches = create_patches(
         image, mask, patch_size=patch_size,
         background_keep=background_keep, max_patches=max_patches,
@@ -466,10 +465,7 @@ def process_region(
     return patches
 
 
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
-
+# --- Dataset ---
 class BurnScarDataset(Dataset):
     """PyTorch dataset for burn scar segmentation patches."""
 
@@ -508,11 +504,6 @@ class BurnScarDataset(Dataset):
             image = np.rot90(image, k, axes=(-2, -1)).copy()
             mask = np.rot90(mask, k, axes=(-2, -1)).copy()
 
-        # Random resized crop: zoom into a random sub-window (scale in [0.7,1.0])
-        # and resize back to the patch size. Adds scale/translation invariance —
-        # cheap regularization that matters when fine-tuning the full ViT on few
-        # patches. Spectral values are untouched (no color jitter — it would
-        # corrupt the reflectance-based burn signature).
         if self.augment_config.get("random_resized_crop", False) and np.random.random() > 0.5:
             import torch
             import torch.nn.functional as F

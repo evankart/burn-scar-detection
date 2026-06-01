@@ -99,9 +99,6 @@ class Trainer:
         self.backbone_mult = self.tc["backbone_lr_multiplier"]
         self.llrd_decay = self.tc.get("llrd_decay", 1.0)  # 1.0 = no layer-wise decay
 
-        # Build the optimizer over currently-trainable params. If the encoder is
-        # frozen at init it is excluded here and re-added (with layer-wise LR
-        # decay) when it unfreezes — see _build_optimizer / the train loop.
         encoder_trainable = any(p.requires_grad for n, p in self.model.named_parameters() if "encoder" in n)
         self.optimizer = self._build_optimizer(include_encoder=encoder_trainable)
 
@@ -142,7 +139,14 @@ class Trainer:
         preserved, deeper layers a bit more. llrd_decay=1.0 disables the decay
         (uniform encoder LR = base_lr * backbone_mult)."""
         import re
-        N_BLOCKS = 12
+        # Infer encoder depth from the model's named parameters so LLRD works
+        # for both Prithvi 1.0 (depth=12) and 2.0 (depth=24).
+        block_ids = set()
+        for n, _ in self.model.named_parameters():
+            mt = re.search(r"encoder.*blocks\.(\d+)\.", n)
+            if mt:
+                block_ids.add(int(mt.group(1)))
+        N_BLOCKS = max(block_ids) + 1 if block_ids else 12
         top = N_BLOCKS + 1
 
         def layer_of(name: str) -> int:
@@ -226,10 +230,6 @@ class Trainer:
                 and hasattr(self.model, "unfreeze_backbone")
             ):
                 self.model.unfreeze_backbone()
-                # The encoder was excluded from the optimizer while frozen; rebuild
-                # it (with layer-wise LR decay) so the now-trainable encoder params
-                # are actually optimized, then give the run a fresh cosine schedule
-                # over the remaining epochs.
                 self.optimizer = self._build_optimizer(include_encoder=True)
                 remaining = max(1, self.tc["epochs"] - epoch + 1)
                 self.scheduler = CosineAnnealingLR(self.optimizer, T_max=remaining)
