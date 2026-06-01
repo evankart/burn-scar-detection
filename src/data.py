@@ -23,12 +23,32 @@ logger = logging.getLogger(__name__)
 HLS_COLLECTION = "HLSS30.v2.0"
 
 
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge overlay into base (overlay wins); returns a new dict."""
+    out = dict(base)
+    for k, v in overlay.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 def load_config(config_path: str = "configs/train_config.yaml") -> dict:
-    """Load a YAML config, deriving train/test/negative_regions from the single
-    ``data.fires`` registry (each entry tagged ``role:``). Configs with explicit
-    region lists pass through unchanged. See README."""
+    """Load a YAML config and derive train/test/negative_regions from the single
+    ``data.fires`` registry (each entry tagged ``role:``).
+
+    A config may set ``extends: <other.yaml>`` (path relative to itself) to
+    inherit from a base config and override only what differs — this is how
+    finetune_config.yaml reuses train_config.yaml's fire list without copying it.
+    See README."""
     with open(config_path) as f:
         config = yaml.safe_load(f)
+
+    base_name = config.pop("extends", None)
+    if base_name:
+        base = load_config(str(Path(config_path).parent / base_name))
+        config = _deep_merge(base, config)
 
     data = config.get("data", {})
     fires = data.get("fires")
