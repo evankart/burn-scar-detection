@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class CETverskyLoss(nn.Module):
     """Weighted CE + soft Tversky on the burn class. alpha penalizes false
     positives, beta false negatives (alpha=beta=0.5 == Dice). See
-    docs/METHODOLOGY.md."""
+    README."""
 
     def __init__(
         self,
@@ -116,7 +116,7 @@ class Trainer:
 
     def _build_optimizer(self, include_encoder: bool):
         """AdamW: decoder at base LR, encoder at a lower LR with layer-wise decay
-        (llrd_decay=1.0 disables decay). See docs/METHODOLOGY.md."""
+        (llrd_decay=1.0 disables decay). See README."""
         import re
         # Infer encoder depth from named params (12 for 1.0, 24 for 2.0).
         block_ids = set()
