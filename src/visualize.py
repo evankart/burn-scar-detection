@@ -1,6 +1,5 @@
 """
 Visualization utilities for burn scar predictions.
-Generates publication-quality figures and Folium map overlays.
 """
 
 import numpy as np

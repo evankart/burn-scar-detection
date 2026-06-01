@@ -1,9 +1,3 @@
-"""
-Cheap diagnostic: does brightening HLS input toward Prithvi's expected
-reflectance reduce over-prediction? Runs the deployed model on Woolsey under
-three input normalizations and compares predicted-burn fraction + P/R/IoU
-(water-masked) against the dNBR truth. No retraining.
-"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
