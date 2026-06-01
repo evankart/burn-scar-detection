@@ -14,18 +14,11 @@ import torch
 
 from src.data import HLSDownloader, normalize_bands, load_config
 from src.model import BurnScarModel
+from src.utils import get_device, water_mask
 
 logger = logging.getLogger(__name__)
 _CONFIG = "configs/train_config.yaml"
 HF_REPO = "evankart/burn-scar-detection-data"
-
-
-def get_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def load_model(checkpoint: str = "checkpoints/balanced_chaparral/best_model.pt",
@@ -133,10 +126,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     pred[~binary_erosion(valid_px, iterations=10)] = 0
 
     # NDWI water mask
-    green = post_ds["B03"].values.astype(np.float32)
-    nir = post_ds["B8A"].values.astype(np.float32)
-    ndwi = (green - nir) / (green + nir + 1e-8)
-    water = ndwi > cfg["data"].get("water_ndwi_threshold", 0.0)
+    water = water_mask(post_ds, threshold=cfg["data"].get("water_ndwi_threshold", 0.0))
     if pad_h or pad_w:
         water = np.pad(water, ((0, pad_h), (0, pad_w)), constant_values=False)
     pred[water] = 0

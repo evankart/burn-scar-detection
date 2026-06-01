@@ -23,6 +23,7 @@ from sklearn.decomposition import PCA
 
 from src.data import _restore_crs, normalize_bands, generate_burn_mask, create_patches
 from src.model import BurnScarModel
+from src.utils import get_device
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ def main():
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    device = get_device()
 
     # Load model
     model = BurnScarModel(

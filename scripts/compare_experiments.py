@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.data import _restore_crs, normalize_bands, generate_burn_mask
 from src.model import BurnScarModel
 from src.train import compute_metrics
+from src.utils import get_device
 from run_inference import run_inference
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -78,7 +79,7 @@ def evaluate_on_woolsey(checkpoint_path: Path, config_path: str) -> dict:
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    device = get_device()
 
     model = BurnScarModel(
         num_classes=config["model"]["num_classes"],

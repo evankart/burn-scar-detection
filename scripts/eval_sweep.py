@@ -16,6 +16,7 @@ import yaml
 
 from src.data import _restore_crs
 from src.model import BurnScarModel
+from src.utils import get_device, water_mask
 from run_inference import run_inference
 
 TEST_FIRES = ["woolsey_fire_2018", "east_troublesome_2020", "thomas_fire_2017"]
@@ -43,7 +44,7 @@ def main():
     ps = cfg["data"]["patch_size"]
     dnbr_t = cfg["data"].get("dnbr_threshold", 0.10)
     cache = cfg["data"]["cache_dir"]
-    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    device = get_device()
 
     # Pre-load test scenes once
     scenes = {}
@@ -69,9 +70,7 @@ def main():
                 dnbr_threshold=dnbr_t, pred_threshold=args.threshold,
             )
             # Same NDWI water exclusion as the deployed pipeline.
-            g = post["B03"].values.astype(np.float32)
-            nir = post["B8A"].values.astype(np.float32)
-            water = (g - nir) / (g + nir + 1e-8) > 0.0
+            water = water_mask(post)
             if water.shape == pred.shape:
                 pred = pred.copy(); true = true.copy()
                 pred[water] = 0; true[water] = 0

@@ -7,14 +7,15 @@ three input normalizations and compares predicted-burn fraction + P/R/IoU
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import numpy as np, torch, xarray as xr, yaml
+import numpy as np, torch, xarray as xr
 from scipy.ndimage import binary_erosion
-from src.data import _restore_crs, generate_burn_mask
+from src.data import _restore_crs, generate_burn_mask, load_config
 from src.model import BurnScarModel, PRITHVI_MEAN, PRITHVI_STD
+from src.utils import get_device, water_mask
 
-cfg = yaml.safe_load(open("configs/train_config.yaml"))
+cfg = load_config("configs/train_config.yaml")
 bands = cfg["data"]["bands"]; ps = 224
-dev = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+dev = get_device()
 M = np.array(PRITHVI_MEAN, dtype=np.float32); S = np.array(PRITHVI_STD, dtype=np.float32)
 
 model = BurnScarModel(num_classes=2, in_channels=6)
@@ -101,8 +102,7 @@ for fire in FIRES:
     true = generate_burn_mask(pre, post, dnbr_threshold=0.10)
     raw = np.stack([np.clip(post[b].values.astype(np.float32), 0, 1) for b in bands], 0)
     valid = ~(np.isnan(raw).any(0) | (np.nan_to_num(raw).max(0) == 0))
-    g = post["B03"].values.astype(np.float32); nir = post["B8A"].values.astype(np.float32)
-    water = (g - nir) / (g + nir + 1e-8) > 0.0
+    water = water_mask(post)
     globals().update(raw=raw, valid=valid, water=water, true=true)
     tfrac = true[valid & ~water].mean()
     print(f"\n=== {fire}  (truth burned frac {tfrac:.3f}) ===")
