@@ -21,9 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import xarray as xr
-import yaml
 
-from src.data import _restore_crs
+from src.data import _restore_crs, load_config
 from src.model import PRITHVI_VERSIONS
 
 
@@ -32,7 +31,7 @@ def main():
     ap.add_argument("--config", default="configs/finetune_config.yaml")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(open(args.config))
+    cfg = load_config(args.config)
     bands = cfg["data"]["bands"]
     version = cfg["model"].get("prithvi_version", "1.0")
     cache_dir = Path(cfg["data"]["cache_dir"])

@@ -23,13 +23,50 @@ logger = logging.getLogger(__name__)
 HLS_COLLECTION = "HLSS30.v2.0"
 
 
+def load_config(config_path: str = "configs/train_config.yaml") -> dict:
+    """Load a YAML config, expanding the single ``data.fires`` registry into the
+    role-keyed region lists the rest of the pipeline consumes.
+
+    The source-of-truth config keeps every fire in ONE list, each tagged with a
+    ``role`` (``train`` / ``test`` / ``negative``) so the train/test/negative
+    splits can never drift apart:
+
+        data:
+          fires:
+            - {name: woolsey_fire_2018, role: test,  lat: ..., ...}
+            - {name: august_complex_2020, role: train, lat: ..., ...}
+
+    This returns the config with ``train_regions`` / ``test_regions`` /
+    ``negative_regions`` derived from those roles (``role`` stripped from each
+    region dict). Configs that already use the explicit lists (e.g. the derived
+    finetune_config.yaml) are passed through unchanged, so this is backward
+    compatible.
+    """
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+
+    data = config.get("data", {})
+    fires = data.get("fires")
+    if fires is not None:
+        buckets: dict[str, list] = {"train": [], "test": [], "negative": []}
+        for fire in fires:
+            role = fire.get("role", "train")
+            region = {k: v for k, v in fire.items() if k != "role"}
+            buckets.setdefault(role, []).append(region)
+        # fires is the source of truth: derived lists overwrite any stale keys.
+        data["train_regions"] = buckets["train"]
+        data["test_regions"] = buckets["test"]
+        if buckets["negative"]:
+            data["negative_regions"] = buckets["negative"]
+    return config
+
+
 # --- Download HLS Data ---
 class HLSDownloader:
     """Downloads and caches HLS imagery from NASA Earthdata."""
 
     def __init__(self, config_path: str = "configs/train_config.yaml"):
-        with open(config_path) as f:
-            self.config = yaml.safe_load(f)
+        self.config = load_config(config_path)
 
         self.bands = self.config["data"]["bands"]
         self.cache_dir = Path(self.config["data"]["cache_dir"])

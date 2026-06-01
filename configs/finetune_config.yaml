@@ -12,25 +12,6 @@ data:
   cache_dir: ./data/cache
   dnbr_threshold: 0.1
   pred_threshold: 0.5
-  test_regions:
-  - name: woolsey_fire_2018
-    lat: 34.16
-    lon: -118.83
-    buffer_km: 20
-    pre_fire_date: '2018-10-01'
-    post_fire_date: '2018-11-20'
-  - name: east_troublesome_2020
-    lat: 40.15
-    lon: -105.85
-    buffer_km: 30
-    pre_fire_date: '2020-08-01'
-    post_fire_date: '2020-11-15'
-  - name: thomas_fire_2017
-    lat: 34.5
-    lon: -119.1
-    buffer_km: 45
-    pre_fire_date: '2017-09-01'
-    post_fire_date: '2018-01-15'
   train_regions:
   - name: august_complex_2020
     lat: 40.0
@@ -254,6 +235,25 @@ data:
     buffer_km: 12
     pre_fire_date: '2017-09-01'
     post_fire_date: '2017-10-25'
+  test_regions:
+  - name: woolsey_fire_2018
+    lat: 34.16
+    lon: -118.83
+    buffer_km: 20
+    pre_fire_date: '2018-10-01'
+    post_fire_date: '2018-11-20'
+  - name: east_troublesome_2020
+    lat: 40.15
+    lon: -105.85
+    buffer_km: 30
+    pre_fire_date: '2020-08-01'
+    post_fire_date: '2020-11-15'
+  - name: thomas_fire_2017
+    lat: 34.5
+    lon: -119.1
+    buffer_km: 45
+    pre_fire_date: '2017-09-01'
+    post_fire_date: '2018-01-15'
   val_fires:
   - carr_fire_2018
   - holy_2018
