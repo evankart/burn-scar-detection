@@ -15,7 +15,7 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$HOME/burn-scar-detection}"
 S3_BUCKET="${S3_BUCKET:-s3://burn-scar-detection}"
-EXP="${EXP:-finetune_big}"
+EXP="${EXP:-finetune_v2}"
 CONFIG="${CONFIG:-configs/finetune_config.yaml}"
 
 cd "$REPO_DIR"
