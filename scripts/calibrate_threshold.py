@@ -14,9 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import torch
 import xarray as xr
-import yaml
 
-from src.data import _restore_crs
+from src.data import _restore_crs, load_config
 from src.model import BurnScarModel
 from run_inference import run_inference
 
@@ -42,7 +41,7 @@ def main():
     ap.add_argument("--config", default="configs/train_config.yaml")
     ap.add_argument("--checkpoint", default="checkpoints/balanced_chaparral/best_model.pt")
     args = ap.parse_args()
-    cfg = yaml.safe_load(open(args.config))
+    cfg = load_config(args.config)
     bands = cfg["data"]["bands"]; ps = cfg["data"]["patch_size"]
     dnbr_t = cfg["data"].get("dnbr_threshold", 0.10); cache = cfg["data"]["cache_dir"]
     device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")

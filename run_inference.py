@@ -13,9 +13,8 @@ from pathlib import Path
 import numpy as np
 import torch
 import xarray as xr
-import yaml
 
-from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs
+from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs, load_config
 from src.model import BurnScarModel
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -110,8 +109,7 @@ def main():
     parser.add_argument("--checkpoint", default="checkpoints/balanced_chaparral/best_model.pt")
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
 
     if torch.cuda.is_available():
         device = torch.device("cuda")

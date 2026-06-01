@@ -1,324 +1,327 @@
-# Burn Scar Detection - Training Configuration
+# Burn Scar Detection - Training Configuration (frozen encoder)
+# Single fire registry: each entry tagged role=train|test. The train/test
+# splits are DERIVED from these roles by src.data.load_config, so they can
+# never drift. finetune_config.yaml is generated from this file.
 
 data:
-  bands: ["B02", "B03", "B04", "B8A", "B11", "B12"]
+  bands:
+  - B02
+  - B03
+  - B04
+  - B8A
+  - B11
+  - B12
   patch_size: 224
-  train_split: 0.9   # of train-fire patches; rest goes to val
+  train_split: 0.9
   num_workers: 4
-  cache_dir: "./data/cache"
-  # dNBR cutoff for the burn label. Must be identical for training labels and
-  # held-out evaluation — a mismatch trains the model on one definition of
-  # "burned" and scores it against another. 0.10 = USGS unburned/low-severity
-  # boundary, capturing the full burn perimeter (vs 0.27 = moderate+ only).
-  dnbr_threshold: 0.10
-  # Decision threshold on the burn-class softmax prob. Calibrated ONLY on
-  # training-fire scenes (never the held-out test fires) to avoid leakage.
+  cache_dir: ./data/cache
+  dnbr_threshold: 0.1
   pred_threshold: 0.5
-
-  # --- Test fires (held-out, not in training set) ---
-  test_regions:
-    - name: "woolsey_fire_2018"
-      lat: 34.16
-      lon: -118.83
-      buffer_km: 20
-      pre_fire_date: "2018-10-01"
-      post_fire_date: "2018-11-20"
-
-    - name: "east_troublesome_2020"
-      lat: 40.15
-      lon: -105.85
-      buffer_km: 30
-      pre_fire_date: "2020-08-01"
-      post_fire_date: "2020-11-15"
-
-    - name: "thomas_fire_2017"
-      lat: 34.50
-      lon: -119.10
-      buffer_km: 45
-      pre_fire_date: "2017-09-01"
-      post_fire_date: "2018-01-15"
-
-  # --- Training fires: 10 largest CA fires with HLS coverage ---
-  train_regions:
-    - name: "august_complex_2020"
-      lat: 40.00
-      lon: -122.60
-      buffer_km: 70
-      pre_fire_date: "2020-05-01"
-      post_fire_date: "2020-11-15"
-
-    - name: "mendocino_complex_2018"
-      lat: 39.25
-      lon: -122.70
-      buffer_km: 55
-      pre_fire_date: "2018-05-01"
-      post_fire_date: "2018-10-01"
-
-    - name: "scu_lightning_complex_2020"
-      lat: 37.55
-      lon: -121.45
-      buffer_km: 45
-      pre_fire_date: "2020-05-01"
-      post_fire_date: "2020-10-15"
-
-    - name: "caldor_fire_2021"
-      lat: 38.73
-      lon: -120.30
-      buffer_km: 20
-      pre_fire_date: "2021-07-01"
-      post_fire_date: "2021-10-01"
-
-    - name: "lnu_lightning_complex_2020"
-      lat: 38.60
-      lon: -122.20
-      buffer_km: 45
-      pre_fire_date: "2020-05-01"
-      post_fire_date: "2020-10-15"
-
-    - name: "north_complex_2020"
-      lat: 39.75
-      lon: -121.30
-      buffer_km: 40
-      pre_fire_date: "2020-05-01"
-      post_fire_date: "2020-12-15"
-
-    - name: "carr_fire_2018"
-      lat: 40.65
-      lon: -122.65
-      buffer_km: 35
-      pre_fire_date: "2018-04-01"
-      post_fire_date: "2018-09-15"
-
-    - name: "dixie_fire_2021"
-      lat: 40.32
-      lon: -120.86
-      buffer_km: 40
-      pre_fire_date: "2021-06-01"
-      post_fire_date: "2021-10-15"
-
-    - name: "antelope_fire_2021"
-      lat: 40.40
-      lon: -120.20
-      buffer_km: 35
-      pre_fire_date: "2021-04-01"
-      post_fire_date: "2021-09-01"
-
-    - name: "bootleg_fire_2021"
-      lat: 42.60
-      lon: -121.35
-      buffer_km: 50
-      pre_fire_date: "2021-05-01"
-      post_fire_date: "2021-08-20"
-
-    # hermits_peak_2022 removed: its cached post scene was stored in raw DN (not
-    # reflectance), saturating to 1.0 after clip — corrupt training input.
-
-    - name: "pearl_hill_2020"
-      lat: 47.95
-      lon: -119.67
-      buffer_km: 40
-      pre_fire_date: "2020-07-01"
-      post_fire_date: "2020-09-15"
-
-    # --- SoCal chaparral fires: close the domain gap. The original training set
-    # was entirely NorCal/Sierra/PNW forest, while the test fires (Woolsey,
-    # Thomas) are SoCal coastal chaparral/suburban — terrain the model never saw,
-    # so it fell back on "dark = burned". These are real SoCal chaparral burns
-    # (verified 9-23% dNBR burn, correct reflectance scaling), none adjacent to
-    # the held-out test fires.
-    - name: "bobcat_2020"
-      lat: 34.24
-      lon: -117.86
-      buffer_km: 25
-      pre_fire_date: "2020-08-10"
-      post_fire_date: "2020-10-20"
-    - name: "holy_2018"
-      lat: 33.69
-      lon: -117.53
-      buffer_km: 14
-      pre_fire_date: "2018-07-10"
-      post_fire_date: "2018-09-20"
-    - name: "apple_2020"
-      lat: 34.00
-      lon: -116.90
-      buffer_km: 16
-      pre_fire_date: "2020-07-10"
-      post_fire_date: "2020-09-20"
-    - name: "cranston_2018"
-      lat: 33.74
-      lon: -116.71
-      buffer_km: 12
-      pre_fire_date: "2018-07-01"
-      post_fire_date: "2018-09-05"
-    - name: "saddleridge_2019"
-      lat: 34.31
-      lon: -118.47
-      buffer_km: 10
-      pre_fire_date: "2019-09-20"
-      post_fire_date: "2019-11-05"
-    - name: "el_dorado_2020"
-      lat: 34.10
-      lon: -117.00
-      buffer_km: 16
-      pre_fire_date: "2020-08-20"
-      post_fire_date: "2020-10-25"
-    - name: "valley_fire_2020"
-      lat: 32.82
-      lon: -116.70
-      buffer_km: 12
-      pre_fire_date: "2020-08-20"
-      post_fire_date: "2020-10-25"
-    - name: "lake_fire_2020"
-      lat: 34.66
-      lon: -118.55
-      buffer_km: 16
-      pre_fire_date: "2020-07-20"
-      post_fire_date: "2020-09-25"
-
-    # --- Expanded diverse fire set (verified real burn + correct scaling). Added
-    # to give encoder fine-tuning enough data to generalize rather than overfit;
-    # spans NorCal, Sierra, PNW, Colorado Rockies, Arizona, and more SoCal. None
-    # adjacent to the held-out test fires. ---
-    - name: "camp_fire_2018"
-      lat: 39.81
-      lon: -121.44
-      buffer_km: 20
-      pre_fire_date: "2018-10-01"
-      post_fire_date: "2018-12-05"
-    - name: "tubbs_2017"
-      lat: 38.55
-      lon: -122.62
-      buffer_km: 16
-      pre_fire_date: "2017-09-01"
-      post_fire_date: "2017-11-10"
-    - name: "kincade_2019"
-      lat: 38.79
-      lon: -122.78
-      buffer_km: 18
-      pre_fire_date: "2019-09-15"
-      post_fire_date: "2019-11-20"
-    - name: "glass_2020"
-      lat: 38.56
-      lon: -122.50
-      buffer_km: 16
-      pre_fire_date: "2020-08-20"
-      post_fire_date: "2020-10-25"
-    - name: "monument_2021"
-      lat: 40.60
-      lon: -123.30
-      buffer_km: 30
-      pre_fire_date: "2021-07-15"
-      post_fire_date: "2021-10-20"
-    - name: "mosquito_2022"
-      lat: 39.00
-      lon: -120.73
-      buffer_km: 22
-      pre_fire_date: "2022-08-25"
-      post_fire_date: "2022-10-25"
-    - name: "river_carmel_2020"
-      lat: 36.30
-      lon: -121.55
-      buffer_km: 20
-      pre_fire_date: "2020-08-20"
-      post_fire_date: "2020-10-20"
-    - name: "holiday_farm_2020"
-      lat: 44.13
-      lon: -122.45
-      buffer_km: 22
-      pre_fire_date: "2020-08-25"
-      post_fire_date: "2020-10-25"
-    - name: "beachie_creek_2020"
-      lat: 44.75
-      lon: -122.18
-      buffer_km: 25
-      pre_fire_date: "2020-08-25"
-      post_fire_date: "2020-10-25"
-    - name: "cameron_peak_2020"
-      lat: 40.60
-      lon: -105.72
-      buffer_km: 28
-      pre_fire_date: "2020-08-01"
-      post_fire_date: "2020-11-05"
-    - name: "calwood_2020"
-      lat: 40.13
-      lon: -105.38
-      buffer_km: 12
-      pre_fire_date: "2020-10-01"
-      post_fire_date: "2020-11-15"
-    - name: "spring_creek_2018"
-      lat: 37.50
-      lon: -105.02
-      buffer_km: 18
-      pre_fire_date: "2018-06-01"
-      post_fire_date: "2018-08-10"
-    - name: "bighorn_2020_az"
-      lat: 32.43
-      lon: -110.78
-      buffer_km: 18
-      pre_fire_date: "2020-05-20"
-      post_fire_date: "2020-07-25"
-    - name: "bush_2020_az"
-      lat: 33.80
-      lon: -111.30
-      buffer_km: 25
-      pre_fire_date: "2020-05-20"
-      post_fire_date: "2020-07-25"
-    - name: "telegraph_2021_az"
-      lat: 33.10
-      lon: -110.90
-      buffer_km: 25
-      pre_fire_date: "2021-05-20"
-      post_fire_date: "2021-07-25"
-    - name: "blue_ridge_2020"
-      lat: 33.88
-      lon: -117.68
-      buffer_km: 12
-      pre_fire_date: "2020-10-01"
-      post_fire_date: "2020-11-20"
-    - name: "bond_2020"
-      lat: 33.75
-      lon: -117.62
-      buffer_km: 12
-      pre_fire_date: "2020-11-25"
-      post_fire_date: "2021-01-15"
-    - name: "la_tuna_2017"
-      lat: 34.23
-      lon: -118.30
-      buffer_km: 12
-      pre_fire_date: "2017-09-01"
-      post_fire_date: "2017-10-25"
-
-  # Hard-negative regions (unburned SoCal dry terrain) were tested as a fix for
-  # land over-prediction but did not improve held-out precision/IoU on the SoCal
-  # test fires — see results/over_prediction_analysis.md. Left out of the default
-  # training set. To reproduce the experiment, add a `negative_regions:` list
-  # here (run_training.py picks it up automatically) with the verified-unburned
-  # scenes documented in the analysis.
-
+  fires:
+  - name: woolsey_fire_2018
+    role: test
+    lat: 34.16
+    lon: -118.83
+    buffer_km: 20
+    pre_fire_date: '2018-10-01'
+    post_fire_date: '2018-11-20'
+  - name: east_troublesome_2020
+    role: test
+    lat: 40.15
+    lon: -105.85
+    buffer_km: 30
+    pre_fire_date: '2020-08-01'
+    post_fire_date: '2020-11-15'
+  - name: thomas_fire_2017
+    role: test
+    lat: 34.5
+    lon: -119.1
+    buffer_km: 45
+    pre_fire_date: '2017-09-01'
+    post_fire_date: '2018-01-15'
+  - name: august_complex_2020
+    role: train
+    lat: 40.0
+    lon: -122.6
+    buffer_km: 70
+    pre_fire_date: '2020-05-01'
+    post_fire_date: '2020-11-15'
+  - name: mendocino_complex_2018
+    role: train
+    lat: 39.25
+    lon: -122.7
+    buffer_km: 55
+    pre_fire_date: '2018-05-01'
+    post_fire_date: '2018-10-01'
+  - name: scu_lightning_complex_2020
+    role: train
+    lat: 37.55
+    lon: -121.45
+    buffer_km: 45
+    pre_fire_date: '2020-05-01'
+    post_fire_date: '2020-10-15'
+  - name: caldor_fire_2021
+    role: train
+    lat: 38.73
+    lon: -120.3
+    buffer_km: 20
+    pre_fire_date: '2021-07-01'
+    post_fire_date: '2021-10-01'
+  - name: lnu_lightning_complex_2020
+    role: train
+    lat: 38.6
+    lon: -122.2
+    buffer_km: 45
+    pre_fire_date: '2020-05-01'
+    post_fire_date: '2020-10-15'
+  - name: north_complex_2020
+    role: train
+    lat: 39.75
+    lon: -121.3
+    buffer_km: 40
+    pre_fire_date: '2020-05-01'
+    post_fire_date: '2020-12-15'
+  - name: carr_fire_2018
+    role: train
+    lat: 40.65
+    lon: -122.65
+    buffer_km: 35
+    pre_fire_date: '2018-04-01'
+    post_fire_date: '2018-09-15'
+  - name: dixie_fire_2021
+    role: train
+    lat: 40.32
+    lon: -120.86
+    buffer_km: 40
+    pre_fire_date: '2021-06-01'
+    post_fire_date: '2021-10-15'
+  - name: antelope_fire_2021
+    role: train
+    lat: 40.4
+    lon: -120.2
+    buffer_km: 35
+    pre_fire_date: '2021-04-01'
+    post_fire_date: '2021-09-01'
+  - name: bootleg_fire_2021
+    role: train
+    lat: 42.6
+    lon: -121.35
+    buffer_km: 50
+    pre_fire_date: '2021-05-01'
+    post_fire_date: '2021-08-20'
+  - name: pearl_hill_2020
+    role: train
+    lat: 47.95
+    lon: -119.67
+    buffer_km: 40
+    pre_fire_date: '2020-07-01'
+    post_fire_date: '2020-09-15'
+  - name: bobcat_2020
+    role: train
+    lat: 34.24
+    lon: -117.86
+    buffer_km: 25
+    pre_fire_date: '2020-08-10'
+    post_fire_date: '2020-10-20'
+  - name: holy_2018
+    role: train
+    lat: 33.69
+    lon: -117.53
+    buffer_km: 14
+    pre_fire_date: '2018-07-10'
+    post_fire_date: '2018-09-20'
+  - name: apple_2020
+    role: train
+    lat: 34.0
+    lon: -116.9
+    buffer_km: 16
+    pre_fire_date: '2020-07-10'
+    post_fire_date: '2020-09-20'
+  - name: cranston_2018
+    role: train
+    lat: 33.74
+    lon: -116.71
+    buffer_km: 12
+    pre_fire_date: '2018-07-01'
+    post_fire_date: '2018-09-05'
+  - name: saddleridge_2019
+    role: train
+    lat: 34.31
+    lon: -118.47
+    buffer_km: 10
+    pre_fire_date: '2019-09-20'
+    post_fire_date: '2019-11-05'
+  - name: el_dorado_2020
+    role: train
+    lat: 34.1
+    lon: -117.0
+    buffer_km: 16
+    pre_fire_date: '2020-08-20'
+    post_fire_date: '2020-10-25'
+  - name: valley_fire_2020
+    role: train
+    lat: 32.82
+    lon: -116.7
+    buffer_km: 12
+    pre_fire_date: '2020-08-20'
+    post_fire_date: '2020-10-25'
+  - name: lake_fire_2020
+    role: train
+    lat: 34.66
+    lon: -118.55
+    buffer_km: 16
+    pre_fire_date: '2020-07-20'
+    post_fire_date: '2020-09-25'
+  - name: camp_fire_2018
+    role: train
+    lat: 39.81
+    lon: -121.44
+    buffer_km: 20
+    pre_fire_date: '2018-10-01'
+    post_fire_date: '2018-12-05'
+  - name: tubbs_2017
+    role: train
+    lat: 38.55
+    lon: -122.62
+    buffer_km: 16
+    pre_fire_date: '2017-09-01'
+    post_fire_date: '2017-11-10'
+  - name: kincade_2019
+    role: train
+    lat: 38.79
+    lon: -122.78
+    buffer_km: 18
+    pre_fire_date: '2019-09-15'
+    post_fire_date: '2019-11-20'
+  - name: glass_2020
+    role: train
+    lat: 38.56
+    lon: -122.5
+    buffer_km: 16
+    pre_fire_date: '2020-08-20'
+    post_fire_date: '2020-10-25'
+  - name: monument_2021
+    role: train
+    lat: 40.6
+    lon: -123.3
+    buffer_km: 30
+    pre_fire_date: '2021-07-15'
+    post_fire_date: '2021-10-20'
+  - name: mosquito_2022
+    role: train
+    lat: 39.0
+    lon: -120.73
+    buffer_km: 22
+    pre_fire_date: '2022-08-25'
+    post_fire_date: '2022-10-25'
+  - name: river_carmel_2020
+    role: train
+    lat: 36.3
+    lon: -121.55
+    buffer_km: 20
+    pre_fire_date: '2020-08-20'
+    post_fire_date: '2020-10-20'
+  - name: holiday_farm_2020
+    role: train
+    lat: 44.13
+    lon: -122.45
+    buffer_km: 22
+    pre_fire_date: '2020-08-25'
+    post_fire_date: '2020-10-25'
+  - name: beachie_creek_2020
+    role: train
+    lat: 44.75
+    lon: -122.18
+    buffer_km: 25
+    pre_fire_date: '2020-08-25'
+    post_fire_date: '2020-10-25'
+  - name: cameron_peak_2020
+    role: train
+    lat: 40.6
+    lon: -105.72
+    buffer_km: 28
+    pre_fire_date: '2020-08-01'
+    post_fire_date: '2020-11-05'
+  - name: calwood_2020
+    role: train
+    lat: 40.13
+    lon: -105.38
+    buffer_km: 12
+    pre_fire_date: '2020-10-01'
+    post_fire_date: '2020-11-15'
+  - name: spring_creek_2018
+    role: train
+    lat: 37.5
+    lon: -105.02
+    buffer_km: 18
+    pre_fire_date: '2018-06-01'
+    post_fire_date: '2018-08-10'
+  - name: bighorn_2020_az
+    role: train
+    lat: 32.43
+    lon: -110.78
+    buffer_km: 18
+    pre_fire_date: '2020-05-20'
+    post_fire_date: '2020-07-25'
+  - name: bush_2020_az
+    role: train
+    lat: 33.8
+    lon: -111.3
+    buffer_km: 25
+    pre_fire_date: '2020-05-20'
+    post_fire_date: '2020-07-25'
+  - name: telegraph_2021_az
+    role: train
+    lat: 33.1
+    lon: -110.9
+    buffer_km: 25
+    pre_fire_date: '2021-05-20'
+    post_fire_date: '2021-07-25'
+  - name: blue_ridge_2020
+    role: train
+    lat: 33.88
+    lon: -117.68
+    buffer_km: 12
+    pre_fire_date: '2020-10-01'
+    post_fire_date: '2020-11-20'
+  - name: bond_2020
+    role: train
+    lat: 33.75
+    lon: -117.62
+    buffer_km: 12
+    pre_fire_date: '2020-11-25'
+    post_fire_date: '2021-01-15'
+  - name: la_tuna_2017
+    role: train
+    lat: 34.23
+    lon: -118.3
+    buffer_km: 12
+    pre_fire_date: '2017-09-01'
+    post_fire_date: '2017-10-25'
 model:
   num_classes: 2
   in_channels: 6
   freeze_backbone: true
   unfreeze_after_epoch: 999
-
 training:
   batch_size: 16
   epochs: 8
-  learning_rate: 5.0e-4
+  learning_rate: 0.0005
   backbone_lr_multiplier: 0.1
   weight_decay: 0.01
   warmup_epochs: 1
   early_stopping_patience: 3
   mixed_precision: true
   seed: 42
-  class_weights: [0.3, 0.7]
+  class_weights:
+  - 0.3
+  - 0.7
   augmentations:
     random_flip: true
     random_rotate: true
     random_crop: true
     color_jitter: false
-
 logging:
-  project_name: "burn-scar-detection"
+  project_name: burn-scar-detection
   log_every_n_steps: 10
-  metric_monitor: "val_mean_iou"
+  metric_monitor: val_mean_iou
