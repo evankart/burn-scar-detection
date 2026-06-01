@@ -18,21 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 class CETverskyLoss(nn.Module):
-    """Weighted cross-entropy + soft Tversky on the burn class.
-
-    CE supervises per-pixel classification; Tversky directly optimizes region
-    overlap (like Dice) but adds an asymmetric penalty knob that controls the
-    precision/recall tradeoff — the Tversky index is
-
-        TI = TP / (TP + alpha*FP + beta*FN)
-
-    where alpha penalizes false positives and beta penalizes false negatives.
-    alpha == beta == 0.5 recovers the soft Dice loss exactly. Raising alpha
-    above beta penalizes over-prediction (false alarms), trading recall for
-    precision — the lever we use to curb a model that floods burn predictions.
-    Both alpha/beta and class_weights are calibrated on the held-out *training*
-    fires' validation split only, never the test fires, to avoid leakage.
-    """
+    """Weighted CE + soft Tversky on the burn class. alpha penalizes false
+    positives, beta false negatives (alpha=beta=0.5 == Dice). See
+    docs/METHODOLOGY.md."""
 
     def __init__(
         self,
@@ -127,14 +115,10 @@ class Trainer:
             logger.info("W&B not available, logging to console only")
 
     def _build_optimizer(self, include_encoder: bool):
-        """AdamW with the decoder at base LR and (optionally) the encoder at a
-        much lower LR with layer-wise decay: shallow Prithvi layers (patch embed,
-        early blocks) get the smallest LR so their general pretrained features are
-        preserved, deeper layers a bit more. llrd_decay=1.0 disables the decay
-        (uniform encoder LR = base_lr * backbone_mult)."""
+        """AdamW: decoder at base LR, encoder at a lower LR with layer-wise decay
+        (llrd_decay=1.0 disables decay). See docs/METHODOLOGY.md."""
         import re
-        # Infer encoder depth from the model's named parameters so LLRD works
-        # for both Prithvi 1.0 (depth=12) and 2.0 (depth=24).
+        # Infer encoder depth from named params (12 for 1.0, 24 for 2.0).
         block_ids = set()
         for n, _ in self.model.named_parameters():
             mt = re.search(r"encoder.*blocks\.(\d+)\.", n)

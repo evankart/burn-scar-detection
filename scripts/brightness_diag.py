@@ -26,10 +26,7 @@ model = model.to(dev).eval()
 FIRES = ["woolsey_fire_2018", "east_troublesome_2020", "thomas_fire_2017"]
 raw = valid = water = true = None  # set per-fire in the loop below
 
-# Global per-band gain calibrated on TRAINING fires only: scale each band so the
-# pooled training-data median reflectance matches Prithvi's pretraining mean.
-# A uniform sensor-level correction for HLS-vs-Prithvi darkness (no per-scene
-# distortion, no test data, no labels).
+# Global per-band gain calibrated on TRAINING fires only; see docs/METHODOLOGY.md.
 TRAIN_SAMPLE = ["august_complex_2020", "mendocino_complex_2018", "caldor_fire_2021",
                 "bobcat_2020", "holy_2018", "carr_fire_2018", "dixie_fire_2021", "bootleg_fire_2021"]
 _meds = {b: [] for b in bands}
