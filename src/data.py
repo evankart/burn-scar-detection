@@ -26,7 +26,7 @@ HLS_COLLECTION = "HLSS30.v2.0"
 def load_config(config_path: str = "configs/train_config.yaml") -> dict:
     """Load a YAML config, deriving train/test/negative_regions from the single
     ``data.fires`` registry (each entry tagged ``role:``). Configs with explicit
-    region lists pass through unchanged. See docs/METHODOLOGY.md."""
+    region lists pass through unchanged. See README."""
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -360,7 +360,7 @@ def normalize_bands(ds: xr.Dataset, bands: list[str],
                     prithvi_version: str = "1.0") -> np.ndarray:
     """Stack + normalize HLS bands with Prithvi pretraining stats → (C, H, W).
     prithvi_version selects stats; a brightness gain is applied for 1.0 only.
-    See docs/METHODOLOGY.md."""
+    See README."""
     from src.model import PRITHVI_VERSIONS
 
     vcfg = PRITHVI_VERSIONS[prithvi_version]
@@ -393,7 +393,7 @@ def create_patches(
     """Slice image+mask into patches: keep all burns + a background_keep fraction
     of pure-background patches. A patch is kept if >= min_valid_fraction pixels
     are valid (nodata imputed to 0); max_patches caps the per-call count. See
-    docs/METHODOLOGY.md."""
+    README."""
     if stride is None:
         stride = patch_size // 4
 

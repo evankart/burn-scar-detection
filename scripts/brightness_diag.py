@@ -1,3 +1,14 @@
+"""Prithvi 1.0 brightness diagnostic — the over-prediction fix (see README).
+
+Runs the deployed model on the three held-out fires under three input
+normalizations (raw Prithvi z-score, per-scene gain, global train-calibrated
+gain) and prints precision/recall/IoU + predicted-burn fraction, showing that
+brightening dark HLS input toward Prithvi's pretraining distribution curbs the
+over-prediction.
+
+Usage:
+    python scripts/brightness_diag.py
+"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -20,7 +31,7 @@ model = model.to(dev).eval()
 FIRES = ["woolsey_fire_2018", "east_troublesome_2020", "thomas_fire_2017"]
 raw = valid = water = true = None  # set per-fire in the loop below
 
-# Global per-band gain calibrated on TRAINING fires only; see docs/METHODOLOGY.md.
+# Global per-band gain calibrated on TRAINING fires only; see README.
 TRAIN_SAMPLE = ["august_complex_2020", "mendocino_complex_2018", "caldor_fire_2021",
                 "bobcat_2020", "holy_2018", "carr_fire_2018", "dixie_fire_2021", "bootleg_fire_2021"]
 _meds = {b: [] for b in bands}

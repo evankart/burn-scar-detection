@@ -95,7 +95,7 @@ def main():
 
     # --- Scale: pooled std vs registry std -> unit sanity-check ---
     # pooled_std < registry_std is expected (domain gap); only flag a gross unit
-    # error (ratio outside ~0.1-3x). See docs/METHODOLOGY.md.
+    # error (ratio outside ~0.1-3x). See README.
     print("\nSCALE (unit sanity-check; ratio<1 expected, only gross errors flagged):")
     print(f"{'band':<6}{'pool_std':>10}{'registry_std':>14}{'ratio':>9}")
     ratios = []

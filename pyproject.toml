@@ -23,7 +23,6 @@ dependencies = [
     "xarray>=2023.12.0",
     "h5netcdf>=1.0.0",
     "h5py>=3.0.0",
-    "geopandas>=0.14.0",
     "shapely>=2.0.0",
     "pyproj>=3.6.0",
     "numpy>=1.26.0",
@@ -34,7 +33,6 @@ dependencies = [
     "streamlit-folium>=0.17.0",
     "pyyaml>=6.0",
     "requests>=2.31.0",
-    "dask>=2024.1.0",
     "pillow>=10.0.0",
 ]
 

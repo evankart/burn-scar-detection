@@ -1,5 +1,5 @@
 """Burn scar segmentation on Prithvi-EO encoders (1.0-100M / 2.0-300M) + an FPN
-decoder. Version is config-selectable; see docs/METHODOLOGY.md for the version
+decoder. Version is config-selectable; see README for the version
 comparison and rationale."""
 
 import importlib.util
