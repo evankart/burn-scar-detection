@@ -1,10 +1,5 @@
 """
-Download + verify a large, geographically diverse batch of wildfires (2018-2022,
-HLSS30 coverage) to expand the training set for encoder fine-tuning. A fire is
-kept only if it shows real burn (dNBR-burn >= 3%) AND correct reflectance scaling
-(NIR median < 1). None are adjacent to the held-out test fires (Woolsey 34.16/
--118.83, Thomas 34.5/-119.1, East Troublesome 40.15/-105.85). Prints YAML-ready
-blocks for the fires that pass.
+Download batch of wildfires (2018-2022)
 """
 import sys
 from pathlib import Path
@@ -26,22 +21,26 @@ CANDIDATES = [
     ("mosquito_2022", 39.00, -120.73, 22, "2022-08-25", "2022-10-25"),
     ("river_carmel_2020", 36.30, -121.55, 20, "2020-08-20", "2020-10-20"),
     ("zogg_2020", 40.46, -122.55, 14, "2020-09-01", "2020-11-01"),
+
     # --- Pacific Northwest ---
     ("holiday_farm_2020", 44.13, -122.45, 22, "2020-08-25", "2020-10-25"),
     ("beachie_creek_2020", 44.75, -122.18, 25, "2020-08-25", "2020-10-25"),
     ("cedar_creek_2022_or", 44.10, -121.92, 25, "2022-08-25", "2022-10-25"),
     ("cold_springs_2020_wa", 48.20, -118.90, 30, "2020-08-25", "2020-10-15"),
     ("schneider_2021_wa", 46.60, -121.00, 20, "2021-08-01", "2021-10-10"),
+
     # --- Rockies / Colorado ---
     ("cameron_peak_2020", 40.60, -105.72, 28, "2020-08-01", "2020-11-05"),
     ("pine_gulch_2020", 39.42, -108.40, 22, "2020-07-20", "2020-09-20"),
     ("calwood_2020", 40.13, -105.38, 12, "2020-10-01", "2020-11-15"),
     ("spring_creek_2018", 37.50, -105.02, 18, "2018-06-01", "2018-08-10"),
+
     # --- Southwest (AZ/NM) ---
     ("bighorn_2020_az", 32.43, -110.78, 18, "2020-05-20", "2020-07-25"),
     ("bush_2020_az", 33.80, -111.30, 25, "2020-05-20", "2020-07-25"),
     ("telegraph_2021_az", 33.10, -110.90, 25, "2021-05-20", "2021-07-25"),
     ("cerro_pelado_2022_nm", 35.72, -106.55, 14, "2022-04-25", "2022-07-01"),
+    
     # --- More SoCal chaparral (test domain; none near Woolsey/Thomas) ---
     ("blue_ridge_2020", 33.88, -117.68, 12, "2020-10-01", "2020-11-20"),
     ("bond_2020", 33.75, -117.62, 12, "2020-11-25", "2021-01-15"),
