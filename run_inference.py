@@ -16,6 +16,7 @@ import xarray as xr
 
 from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs, load_config
 from src.model import BurnScarModel
+from src.utils import get_device, water_mask
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -110,13 +111,7 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
-
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+    device = get_device()
 
     model = BurnScarModel(
         num_classes=config["model"]["num_classes"],
@@ -170,17 +165,10 @@ def main():
         # Continuous dNBR (same grid as true_mask) for the severity overlay.
         dnbr = compute_dnbr(pre_ds, post_ds)
 
-        # Water exclusion. Open water is not burnable, yet both the model
-        # (post-only) and the dNBR label produce spurious "burned" pixels over
-        # it: where NIR ≈ SWIR ≈ 0, NBR is pure noise and dNBR randomly crosses
-        # the threshold. Mask water deterministically from the NDWI spectral
-        # index (green vs NIR) — independent of the model and never tuned on the
-        # test fires. Burn scars sit at NDWI ≤ 0 (NIR ≥ green), so a 0 cutoff
-        # removes ocean/lakes without eating real burns.
-        green = post_ds["B03"].values.astype(np.float32)
-        nir = post_ds["B8A"].values.astype(np.float32)
-        ndwi = (green - nir) / (green + nir + 1e-8)
-        water = ndwi > config["data"].get("water_ndwi_threshold", 0.0)
+        # Water exclusion (see src.utils.water_mask): open water is not burnable
+        # but both the post-only model and the dNBR label flag it, so mask it
+        # deterministically from NDWI — never tuned on the test fires.
+        water = water_mask(post_ds, threshold=config["data"].get("water_ndwi_threshold", 0.0))
         if water.shape == pred_mask.shape:
             pred_mask[water] = 0
             true_mask[water] = 0
