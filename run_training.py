@@ -17,10 +17,9 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 warnings.filterwarnings("ignore", message=".*unauthenticated.*HF Hub.*")
 
 import numpy as np
-import yaml
 import torch
 
-from src.data import HLSDownloader, process_region, create_dataloaders
+from src.data import HLSDownloader, process_region, create_dataloaders, load_config
 from src.model import BurnScarModel
 from src.train import Trainer
 from src.visualize import plot_training_curves
@@ -89,8 +88,7 @@ def main():
                              "Lets a brightness diagnostic run before GPU hours.")
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
 
     if args.tversky_alpha is not None:
         config["training"]["tversky_alpha"] = args.tversky_alpha

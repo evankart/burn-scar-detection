@@ -1,12 +1,9 @@
 """On-demand burn-scar detection for the Streamlit app.
 
-Given a user-drawn AOI (bbox) and a post-fire date, download the post-fire HLS
+Given a user-drawn AOI and a post-fire date, download the post-fire HLS
 scene, run the model, and return the predicted burn mask + a display image +
-lat/lon bounds. Post-only: no pre-fire reference / dNBR — this is the real-world
-use case where you have one image and want the burn extent.
+lat/lon bounds.
 
-Mirrors run_inference's normalization (brightness gain via normalize_bands),
-sliding-window inference, NDWI water masking, and 4-corner bounds logic.
 """
 import logging
 from datetime import datetime, timedelta
@@ -14,15 +11,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import yaml
 
-from src.data import HLSDownloader, normalize_bands
+from src.data import HLSDownloader, normalize_bands, load_config
 from src.model import BurnScarModel
 
 logger = logging.getLogger(__name__)
 _CONFIG = "configs/train_config.yaml"
-# Deployed checkpoint isn't in git (too large); fetched from this HF repo when
-# missing (e.g. on Hugging Face Spaces). Upload best_model.pt there once.
 HF_REPO = "evankart/burn-scar-detection-data"
 
 
@@ -37,7 +31,7 @@ def get_device() -> torch.device:
 def load_model(checkpoint: str = "checkpoints/balanced_chaparral/best_model.pt",
                config_path: str = _CONFIG):
     """Load the deployed model once (cache with st.cache_resource in the app)."""
-    cfg = yaml.safe_load(open(config_path))
+    cfg = load_config(config_path)
     device = get_device()
     model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
                           in_channels=cfg["model"]["in_channels"])
@@ -54,8 +48,7 @@ def load_model(checkpoint: str = "checkpoints/balanced_chaparral/best_model.pt",
 
 
 def _granule_date(granule) -> str:
-    """Parse the acquisition date from an HLS granule native-id, e.g.
-    HLS.S30.T11SLT.2018327T184709.v2.0 -> '2018-11-23'."""
+    """Parse the acquisition date from an HLS granule native-id, e.g. HLS.S30.T11SLT.2018327T184709.v2.0 -> '2018-11-23'."""
     try:
         nid = granule.get("meta", {}).get("native-id", "")
         token = nid.split(".")[3]          # '2018327T184709'
@@ -106,7 +99,6 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     image = normalize_bands(post_ds, bands)  # brightness gain applied here
     _, h, w = image.shape
 
-    # Pad up to patch_size if the AOI is smaller than one patch (small polygons).
     pad_h, pad_w = max(0, patch_size - h), max(0, patch_size - w)
     if pad_h or pad_w:
         image = np.pad(image, ((0, 0), (0, pad_h), (0, pad_w)), constant_values=np.nan)
@@ -140,7 +132,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     from scipy.ndimage import binary_erosion
     pred[~binary_erosion(valid_px, iterations=10)] = 0
 
-    # NDWI water mask (same as run_inference) — open water isn't burnable.
+    # NDWI water mask
     green = post_ds["B03"].values.astype(np.float32)
     nir = post_ds["B8A"].values.astype(np.float32)
     ndwi = (green - nir) / (green + nir + 1e-8)

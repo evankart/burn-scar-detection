@@ -10,7 +10,13 @@ import sys
 from pathlib import Path
 import yaml
 
-src = yaml.safe_load(open("configs/train_config.yaml"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.data import load_config
+
+# load_config expands the single fires registry into train_regions/test_regions
+# so the derived finetune config inherits the exact same split.
+src = load_config("configs/train_config.yaml")
+src["data"].pop("fires", None)  # finetune config uses the explicit derived lists
 
 src["data"]["val_fires"] = ["carr_fire_2018", "holy_2018"]  # one NorCal + one SoCal, held out of training
 # Prithvi 2.0 uses B05/B06/B07 (broadband NIR + SWIR) instead of B8A/B11/B12
