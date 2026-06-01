@@ -1,8 +1,11 @@
 # Cloud fine-tune runbook (AWS, us-west-2)
 
-Run the heavy encoder fine-tune on a GPU instance co-located with the NASA HLS
-archive (us-west-2 → direct-S3 reads, fast in-region downloads). The instance is
-disposable: it trains, uploads the checkpoint to S3, and self-terminates.
+Run the heavy **Prithvi-EO-2.0-300M** encoder fine-tune (`configs/finetune_config.yaml`,
+experiment `finetune_v2`) on a GPU instance co-located with the NASA HLS archive
+(us-west-2 → direct-S3 reads, fast in-region downloads). The instance is
+disposable: it downloads HLS, runs the brightness diagnostic, trains, uploads the
+checkpoint to S3, and self-terminates. `run_job.sh` re-downloads the fires with
+the 2.0 band set (B05/B06/B07).
 
 ## One-time setup (already done)
 - S3 bucket `burn-scar-detection` (us-west-2) — results land here.
@@ -38,9 +41,9 @@ Terminate" that deletes it and stops billing. As a safety net you can also run
 ## Get results back + evaluate locally
 ```bash
 # on your Mac, after the job finishes:
-aws s3 cp s3://burn-scar-detection/finetune_big/ ./checkpoints/finetune_big/ --recursive
+aws s3 cp s3://burn-scar-detection/finetune_v2/ ./checkpoints/finetune_v2/ --recursive
 python scripts/eval_sweep.py --threshold 0.5 \
-  --checkpoints checkpoints/balanced_chaparral/best_model.pt checkpoints/finetune_big/best_model.pt
+  --checkpoints checkpoints/balanced_chaparral/best_model.pt checkpoints/finetune_v2/best_model.pt
 ```
 (The eval runs locally because the baseline checkpoint isn't in git.)
 
