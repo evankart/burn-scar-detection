@@ -1,16 +1,9 @@
-"""
-Streamlit app for interactive burn scar detection visualization.
-"""
-
 import json
 import math
 import sys
 from datetime import date
 from pathlib import Path
 
-# Ensure repo root is on sys.path BEFORE any src.* imports.
-# Needed on HF Spaces where app_file = src/app/streamlit_app.py and
-# the working directory is the Space root, not the package root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import folium
@@ -153,8 +146,6 @@ def create_map(region: dict, pred_data: dict | None, overlay_opacity: float) -> 
     if pred_data is not None:
         create_sentinel_overlay(pred_data["image"], pred_data["bounds"]).add_to(m)
         if pred_data.get("dnbr") is not None:
-            # Ground-truth burn-severity gradient; off by default so it doesn't
-            # stack on the model prediction — toggle it on via the layer control.
             create_severity_overlay(
                 pred_data["dnbr"], pred_data["bounds"], show=False
             ).add_to(m)
@@ -166,9 +157,7 @@ def create_map(region: dict, pred_data: dict | None, overlay_opacity: float) -> 
     return m
 
 
-# ----------------------------------------------------------------------------
-# Custom-AOI live detection (post-fire only)
-# ----------------------------------------------------------------------------
+# --- Custom AOI live detection (post-fire only) ---
 @st.cache_resource(show_spinner=False)
 def _load_model():
     from src.infer import load_model
@@ -405,7 +394,7 @@ def main():
 
         Harmonized Landsat Sentinel-2 (HLS) imagery with 6 spectral bands (Blue, Green, Red, NIR, SWIR1, SWIR2)
         downloaded from [NASA Earthdata](https://www.earthdata.nasa.gov/).
-        For each fire, two scenes are fetched: one before the fire and one after, selecting the
+        For each training fire, two scenes are fetched: one before the fire and one after, selecting the
         lowest cloud-cover acquisition within the relevant date window.
 
         #### Labels

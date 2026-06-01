@@ -1,7 +1,5 @@
 """Brightness/scale diagnostic for a fine-tune: pools per-band median + std over
-the TRAINING fires only and compares to the version's pretraining stats, printing
-the implied brightness gain. Read-only (no normalization/training changes). See
-docs/METHODOLOGY.md (HLS brightness gain).
+the TRAINING fires only and compares to the version's pretraining stats
 
 Usage:
     python scripts/band_stats_v2.py --config configs/finetune_config.yaml
