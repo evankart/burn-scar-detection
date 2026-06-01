@@ -46,7 +46,7 @@ HLS (6 bands, 30m) → brightness gain → Prithvi-EO ViT encoder → FPN decode
 
 **Sliding-window inference.** Scenes are tiled into overlapping 224-px windows (half-patch stride), with a final row/col anchored flush to the edge; overlaps are averaged and a thin border by imputed nodata is trimmed.
 
-**Configuration registry.** Every fire lives in one `data.fires` list in `configs/train_config.yaml`, each tagged `role: train | test`; `src.data.load_config` derives the splits so they can't drift. `configs/finetune_config.yaml` is generated from it by `scripts/make_finetune_config.py`.
+**Configuration registry.** Every fire lives in one `data.fires` list in `configs/train_config.yaml`, each tagged `role: train | test`; `src.data.load_config` derives the splits so they can't drift. `configs/finetune_config.yaml` is a small overlay that `extends: train_config.yaml` — it inherits the fire list and only states what the 2.0 fine-tune changes.
 
 ## The over-prediction investigation
 
@@ -96,7 +96,7 @@ src/
   app/streamlit_app.py   interactive demo (held-out fires + live custom detection)
 configs/
   train_config.yaml      single fire registry (role-tagged) + training settings
-  finetune_config.yaml   generated 2.0 fine-tune config
+  finetune_config.yaml   2.0 fine-tune overlay (extends train_config.yaml)
 scripts/
   eval_sweep.py          evaluate checkpoints on the held-out fires (fixed threshold)
   calibrate_threshold.py honest threshold calibration on train fires only
@@ -104,7 +104,6 @@ scripts/
   band_stats_v2.py       2.0 brightness/scale diagnostic (run before the 2.0 fine-tune)
   compare_experiments.py frozen vs fine-tuned comparison plots
   batch_download_fires.py bulk HLS download for the training set
-  make_finetune_config.py derive finetune_config.yaml from train_config.yaml
   push_to_space.py       deploy all files to the HF Space
 cloud/
   run_job.sh             self-terminating AWS GPU job (download → diagnose → train → upload)
