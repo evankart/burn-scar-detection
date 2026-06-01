@@ -33,7 +33,7 @@ def run_inference(
     pred_threshold: float = 0.4,
     return_prob: bool = False,
     prithvi_version: str = "1.0",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, ...]:
     """Sliding-window inference on a full scene. Returns (pred_mask, true_mask,
     image); with return_prob=True also appends the pre-threshold probability map.
     dnbr_threshold must match the training-label value. See docs/METHODOLOGY.md."""
