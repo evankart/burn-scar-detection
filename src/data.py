@@ -24,24 +24,9 @@ HLS_COLLECTION = "HLSS30.v2.0"
 
 
 def load_config(config_path: str = "configs/train_config.yaml") -> dict:
-    """Load a YAML config, expanding the single ``data.fires`` registry into the
-    role-keyed region lists the rest of the pipeline consumes.
-
-    The source-of-truth config keeps every fire in ONE list, each tagged with a
-    ``role`` (``train`` / ``test`` / ``negative``) so the train/test/negative
-    splits can never drift apart:
-
-        data:
-          fires:
-            - {name: woolsey_fire_2018, role: test,  lat: ..., ...}
-            - {name: august_complex_2020, role: train, lat: ..., ...}
-
-    This returns the config with ``train_regions`` / ``test_regions`` /
-    ``negative_regions`` derived from those roles (``role`` stripped from each
-    region dict). Configs that already use the explicit lists (e.g. the derived
-    finetune_config.yaml) are passed through unchanged, so this is backward
-    compatible.
-    """
+    """Load a YAML config, deriving train/test/negative_regions from the single
+    ``data.fires`` registry (each entry tagged ``role:``). Configs with explicit
+    region lists pass through unchanged. See docs/METHODOLOGY.md."""
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -157,17 +142,9 @@ class HLSDownloader:
         return ref.rio.write_crs(utm_epsg)
 
     def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10) -> xr.Dataset:
-        """
-        Mosaic up to max_scenes onto a fixed UTM grid spanning the full bbox.
-
-        Uses rioxarray.merge, which places every scene at its true geographic
-        position, so scenes from different MGRS tiles tile together correctly.
-        Granules arrive sorted least-cloudy-first; merge keeps the first valid
-        pixel and fills nodata gaps from later scenes. This replaces a per-scene
-        reproject_match + manual gap-fill that stretched a single clipped tile
-        across the whole grid and short-circuited on the first scene, leaving
-        multi-tile bboxes (e.g. fires at a 4-tile junction) mostly nodata.
-        """
+        """Mosaic up to max_scenes onto a fixed UTM grid spanning the bbox via
+        rioxarray.merge (each scene placed at its true position; least-cloudy
+        first, nodata gaps filled from later scenes)."""
         import gc
         from rioxarray.merge import merge_arrays
 
@@ -232,10 +209,7 @@ class HLSDownloader:
         post_path = self.cache_dir / f"{name}_post.nc"
 
         if pre_path.exists() and post_path.exists():
-            # Band-validate the cache: Prithvi 1.0 caches store B8A/B11/B12, while
-            # 2.0 needs B05/B06/B07. A stale 1.0 NetCDF lacks the 2.0 bands and
-            # would KeyError downstream, so re-download if the requested bands are
-            # not all present (and vice versa).
+            # Re-download if the cache lacks the requested bands (1.0 vs 2.0 differ).
             if self._cache_has_bands(post_path) and self._cache_has_bands(pre_path):
                 logger.info(f"Using cached data for {name}")
                 return {"pre": pre_path, "post": post_path}
@@ -384,29 +358,16 @@ def compute_dnbr(pre_ds: xr.Dataset, post_ds: xr.Dataset) -> np.ndarray:
 
 def normalize_bands(ds: xr.Dataset, bands: list[str],
                     prithvi_version: str = "1.0") -> np.ndarray:
-    """
-    Stack and normalize HLS bands using Prithvi pretraining statistics.
-    Returns (C, H, W). prithvi_version selects normalization stats + gain.
-
-    Prithvi 1.0 (B02,B03,B04,B8A,B11,B12 — 0-1 reflectance):
-      A brightness gain is applied before z-scoring because HLS LaSRC output
-      runs ~1.4-1.9x darker than Prithvi 1.0's pretraining distribution.
-      This corrected Woolsey IoU from 0.53 → 0.73 (see over_prediction_analysis.md).
-
-    Prithvi 2.0 (B02,B03,B04,B05,B06,B07 — different bands, different stats):
-      The 2.0 pretraining used raw DN / 10000, with per-band stats derived from
-      a much larger and more diverse dataset (4.2M scenes). No brightness gain
-      is applied for 2.0 — whether one is needed should be verified empirically.
-    """
+    """Stack + normalize HLS bands with Prithvi pretraining stats → (C, H, W).
+    prithvi_version selects stats; a brightness gain is applied for 1.0 only.
+    See docs/METHODOLOGY.md."""
     from src.model import PRITHVI_VERSIONS
 
     vcfg = PRITHVI_VERSIONS[prithvi_version]
     MEAN = vcfg["mean"]
     STD  = vcfg["std"]
 
-    # Brightness gain for 1.0 only — calibrated so training-fire median
-    # reflectance matches the Prithvi 1.0 pretraining mean.
-    GAIN_1 = [1.8793, 1.7172, 1.5741, 1.4097, 1.1295, 1.1276]
+    GAIN_1 = [1.8793, 1.7172, 1.5741, 1.4097, 1.1295, 1.1276]  # 1.0 brightness gain
     GAIN = GAIN_1 if prithvi_version == "1.0" else [1.0] * len(bands)
 
     arrays = []
@@ -429,17 +390,10 @@ def create_patches(
     min_valid_fraction: float = 0.5,
     max_patches: int | None = None,
 ) -> list[dict]:
-    """Slice image and mask into patches, keeping all burns + a fraction of
-    pure-background patches. Burn scars are rare, so retaining every background
-    patch would swamp the positive class and bias the model toward predicting
-    "unburned"; background_keep caps that imbalance.
-
-    A patch is kept when at least min_valid_fraction of its pixels are valid
-    (not nodata); the remaining nodata is imputed to 0 (≈ per-band mean in
-    z-scored space). Requiring *every* pixel to be valid — as an earlier
-    version did — silently dropped entire large scenes whose every 224x224
-    window clipped a nodata gap, starving training of the biggest fires.
-    max_patches caps the per-call count so a single mega-fire can't dominate."""
+    """Slice image+mask into patches: keep all burns + a background_keep fraction
+    of pure-background patches. A patch is kept if >= min_valid_fraction pixels
+    are valid (nodata imputed to 0); max_patches caps the per-call count. See
+    docs/METHODOLOGY.md."""
     if stride is None:
         stride = patch_size // 4
 

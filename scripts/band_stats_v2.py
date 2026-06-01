@@ -1,14 +1,7 @@
-"""
-Brightness diagnostic for a Prithvi 2.0 fine-tune (run after download, before
-training). For each band in the chosen config, pools the per-band median surface
-reflectance across the TRAINING fires only (never test/val fires) and compares it
-to the version's pretraining mean. The ratio mean/median is the implied per-band
-brightness gain — if it sits near 1.0, HLS already matches the 2.0 pretraining
-distribution and no gain is needed; if it is consistently >1, the same darkness
-correction that helped Prithvi 1.0 likely applies to 2.0 as well.
-
-This does NOT modify normalization or train — it only prints the numbers so we
-can decide whether to set a 2.0 GAIN before committing GPU hours.
+"""Brightness/scale diagnostic for a fine-tune: pools per-band median + std over
+the TRAINING fires only and compares to the version's pretraining stats, printing
+the implied brightness gain. Read-only (no normalization/training changes). See
+docs/METHODOLOGY.md (HLS brightness gain).
 
 Usage:
     python scripts/band_stats_v2.py --config configs/finetune_config.yaml
@@ -102,15 +95,9 @@ def main():
         print(f"→ Gains depart from 1.0 (spread {spread:.2f}): consider setting "
               f"GAIN_2 in src/data.normalize_bands and re-running this diagnostic.")
 
-    # --- Scale: pooled std vs registry std -> unit/scale sanity-check ---
-    # IMPORTANT: the registry std is the *pretraining-distribution* std (what we
-    # z-score against so the frozen encoder sees its expected distribution). HLS
-    # is darker and less varied than pretraining, so pooled_std < registry_std is
-    # EXPECTED and not a bug — it is the same domain gap the brightness gain
-    # addresses. For reference, the verified 1.0 stats give std ratios ~0.3-0.6.
-    # This check therefore only flags a GROSS scale error: if my hand-derived 2.0
-    # stats were off by a unit factor (e.g. raw DN vs 0-1 reflectance), the ratio
-    # would be ~10x or ~0.01x off. Anything in ~0.1-3x is plausible.
+    # --- Scale: pooled std vs registry std -> unit sanity-check ---
+    # pooled_std < registry_std is expected (domain gap); only flag a gross unit
+    # error (ratio outside ~0.1-3x). See docs/METHODOLOGY.md.
     print("\nSCALE (unit sanity-check; ratio<1 expected, only gross errors flagged):")
     print(f"{'band':<6}{'pool_std':>10}{'registry_std':>14}{'ratio':>9}")
     ratios = []
