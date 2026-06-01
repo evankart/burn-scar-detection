@@ -1,32 +1,6 @@
-"""
-Burn scar segmentation model using Prithvi-EO geospatial foundation models.
-
-Supports two encoder versions, selectable via config:
-  - Prithvi-EO-1.0-100M  (ViT-Base,  embed_dim=768,  depth=12, num_frames=3)
-  - Prithvi-EO-2.0-300M  (ViT-Large, embed_dim=1024, depth=24, num_frames=4)
-
-Both use the same FPN decoder API; the decoder's lateral convolutions are
-sized from embed_dim so they adapt automatically.
-
-Key differences between 1.0 and 2.0:
-  - 2.0 has 3× more parameters in the encoder (300M vs 100M).
-  - 2.0 was pretrained on ~4.2M HLS scenes vs ~640k for 1.0.
-  - 2.0 uses 4 temporal frames (vs 3) and a different band order:
-    B02,B03,B04,B05,B06,B07 — note B05/B06/B07 (Landsat-style NIR/SWIR),
-    *not* B8A/B11/B12. Normalization stats are also different (raw DN scale
-    ~0-2000, not 0-1 reflectance).
-  - 2.0's feature layers are tapped at [5,11,17,23] (every 6th of 24 layers)
-    vs [2,4,7,11] for 1.0.
-
-IBM also released Prithvi-EO-2.0-300M-BurnScars, a 2.0 model already
-fine-tuned on burn scars via terratorch. We don't use that checkpoint
-directly (different framework + UNet decoder), but we use the same base
-encoder with our FPN decoder.
-
-References:
-  1.0: https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M
-  2.0: https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M
-"""
+"""Burn scar segmentation on Prithvi-EO encoders (1.0-100M / 2.0-300M) + an FPN
+decoder. Version is config-selectable; see docs/METHODOLOGY.md for the version
+comparison and rationale."""
 
 import importlib.util
 import logging
@@ -48,15 +22,11 @@ PRITHVI_VERSIONS = {
         "depth":       12,
         "num_heads":   12,
         "num_frames":  3,
-        # HLS surface reflectance (0–1), B02 B03 B04 B8A B11 B12
-        # These are Prithvi's *pretraining* statistics.  We apply a brightness
-        # gain before z-scoring (see normalize_bands) because HLS LaSRC output
-        # runs darker than this distribution.
+        # Pretraining stats, HLS reflectance (0–1). A brightness gain is applied
+        # before z-scoring (see normalize_bands).
         "mean": [0.077523, 0.108099, 0.122859, 0.249720, 0.220421, 0.161083],
         "std":  [0.128153, 0.127003, 0.139948, 0.136834, 0.129168, 0.115451],
-        # Encoder layers to tap for multi-scale FPN features (0-indexed).
-        # Evenly spaced across depth=12.
-        "feature_layers": [2, 4, 7, 11],
+        "feature_layers": [2, 4, 7, 11],  # FPN taps, evenly spaced over depth 12
         "bands": ["B02", "B03", "B04", "B8A", "B11", "B12"],
     },
     "2.0": {
@@ -67,14 +37,10 @@ PRITHVI_VERSIONS = {
         "depth":       24,
         "num_heads":   16,
         "num_frames":  4,
-        # Raw DN scale (~0–10000 before /10000), B02 B03 B04 B05 B06 B07.
-        # Divide by 10000 first, then z-score with these stats.
-        # Source: Prithvi-EO-2.0-300M config.json / BurnScars config.
+        # Pretraining stats (raw DN / 10000), from Prithvi-EO-2.0-300M config.
         "mean": [0.10870, 0.13420, 0.14330, 0.27340, 0.19580, 0.13630],
         "std":  [0.22480, 0.21790, 0.21780, 0.18500, 0.12420, 0.10490],
-        # Evenly spaced across depth=24 (every 6th layer, matching the
-        # official BurnScars fine-tune config: indices [5,11,17,23]).
-        "feature_layers": [5, 11, 17, 23],
+        "feature_layers": [5, 11, 17, 23],  # FPN taps, every 6th of depth 24
         "bands": ["B02", "B03", "B04", "B05", "B06", "B07"],
     },
 }

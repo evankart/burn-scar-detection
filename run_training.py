@@ -1,10 +1,7 @@
 """
 Main training script for burn scar detection.
 
-Train on 10 large California fires, evaluate on the held-out Woolsey Fire.
-
 Usage:
-    python run_training.py
     python run_training.py --config configs/train_config.yaml
 """
 
@@ -75,8 +72,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/train_config.yaml")
     parser.add_argument("--experiment-name", default="default")
-    # Optional overrides for the precision/recall sweep. Tversky alpha penalizes
-    # false positives, beta penalizes false negatives (alpha=beta=0.5 == Dice).
+    # Optional loss overrides (see docs/METHODOLOGY.md): alpha=FP, beta=FN penalty.
     parser.add_argument("--tversky-alpha", type=float, default=None)
     parser.add_argument("--tversky-beta", type=float, default=None)
     parser.add_argument("--class-weights", type=float, nargs=2, default=None,
@@ -125,9 +121,7 @@ def main():
     logger.info("=== Preprocessing train fires ===")
     train_patches = collect_patches(train_regions, downloaded, config)
 
-    # Hard-negative regions: unburned dry SoCal terrain (≈all-background masks).
-    # They teach the post-only model that dark/dry land is not burned, curbing
-    # over-prediction. Downloaded + patched through the same pipeline.
+    # Hard-negative regions (unburned terrain) curb over-prediction; see docs/METHODOLOGY.md.
     negative_regions = config["data"].get("negative_regions", [])
     if negative_regions:
         logger.info(f"=== Preprocessing hard-negative regions: {[r['name'] for r in negative_regions]} ===")
@@ -142,11 +136,7 @@ def main():
 
     val_fires = config["data"].get("val_fires", [])
     if val_fires:
-        # Fire-based split: hold out whole fires for validation so train and val
-        # patches never come from the same scene. A random patch split lets
-        # patches from one fire land in both train and val (spatially adjacent,
-        # near-duplicate), giving an optimistic val IoU that hides overfitting —
-        # which matters most when fine-tuning the full ViT.
+        # Fire-based split: hold out whole fires (avoids train/val leakage); see docs/METHODOLOGY.md.
         split_patches = {
             "train": [p for p in train_patches if p.get("region_name") not in val_fires],
             "val":   [p for p in train_patches if p.get("region_name") in val_fires],
