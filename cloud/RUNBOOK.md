@@ -52,3 +52,38 @@ python scripts/eval_sweep.py --threshold 0.5 \
 - g5.xlarge on-demand ≈ $1.01/hr; a full fine-tune ≈ $1–2, covered by Free-tier credits.
 - The instance self-terminates → no idle charges. Budget alarm set at $10 as a backstop.
 - Spot (~$0.30/hr) would be cheaper but needs a separate quota + interruption handling; not used here.
+
+---
+
+# Deploy to Hugging Face Spaces (Streamlit, free CPU)
+
+Hosts both app tabs: precomputed held-out results, and live custom-area detection
+(Prithvi runs on CPU — slow but works in the 16 GB Space).
+
+## Account-side setup
+1. **Create a Write token:** huggingface.co/settings/tokens → New token → type **Write**.
+2. **Log in locally:** `huggingface-cli login` (paste the Write token).
+3. **Set Earthdata secrets on the Space** (Settings → Variables and secrets → New secret):
+   `EARTHDATA_USERNAME` and `EARTHDATA_PASSWORD` (power `earthaccess` env-var auth).
+
+## Upload model + predictions (the app fetches these at runtime)
+```bash
+huggingface-cli upload evankart/burn-scar-detection-data \
+  checkpoints/balanced_chaparral/best_model.pt \
+  checkpoints/balanced_chaparral/best_model.pt --repo-type dataset
+for f in woolsey_fire_2018 east_troublesome_2020 thomas_fire_2017; do
+  huggingface-cli upload evankart/burn-scar-detection-data \
+    data/predictions/$f.npz predictions/$f.npz --repo-type dataset
+done
+```
+
+## Push the app
+`python scripts/push_to_space.py` uploads `app.py`, `src/**`, `configs/train_config.yaml`,
+`requirements.txt`, `packages.txt`, and `cloud/space_README.md` → `README.md`. The
+`app_file: app.py` front-matter makes Spaces run the top-level entrypoint, so
+`from src.X import ...` resolves without sys.path hacks.
+
+## Notes
+- **Latency:** first live detection on CPU is ~2–4 min (download + model); cached after.
+- **Memory:** Prithvi fits the 16 GB CPU Space. Switch to GPU/ZeroGPU for speed — no code change.
+- **Cost:** free on the CPU tier.

@@ -72,7 +72,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/train_config.yaml")
     parser.add_argument("--experiment-name", default="default")
-    # Optional loss overrides (see docs/METHODOLOGY.md): alpha=FP, beta=FN penalty.
+    # Optional loss overrides (see README): alpha=FP, beta=FN penalty.
     parser.add_argument("--tversky-alpha", type=float, default=None)
     parser.add_argument("--tversky-beta", type=float, default=None)
     parser.add_argument("--class-weights", type=float, nargs=2, default=None,
@@ -121,7 +121,7 @@ def main():
     logger.info("=== Preprocessing train fires ===")
     train_patches = collect_patches(train_regions, downloaded, config)
 
-    # Hard-negative regions (unburned terrain) curb over-prediction; see docs/METHODOLOGY.md.
+    # Hard-negative regions (unburned terrain) curb over-prediction; see README.
     negative_regions = config["data"].get("negative_regions", [])
     if negative_regions:
         logger.info(f"=== Preprocessing hard-negative regions: {[r['name'] for r in negative_regions]} ===")
@@ -136,7 +136,7 @@ def main():
 
     val_fires = config["data"].get("val_fires", [])
     if val_fires:
-        # Fire-based split: hold out whole fires (avoids train/val leakage); see docs/METHODOLOGY.md.
+        # Fire-based split: hold out whole fires (avoids train/val leakage); see README.
         split_patches = {
             "train": [p for p in train_patches if p.get("region_name") not in val_fires],
             "val":   [p for p in train_patches if p.get("region_name") in val_fires],
