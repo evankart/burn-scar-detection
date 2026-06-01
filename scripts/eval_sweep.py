@@ -1,9 +1,5 @@
 """
 Evaluate checkpoints on the held-out test fires at a FIXED decision threshold.
-
-Honest protocol: the threshold is fixed at 0.5 for every model (no per-model
-tuning of any kind on the test fires), so the comparison isolates the effect of
-the training-loss change. Reports precision / recall / IoU per fire + macro.
 """
 import argparse
 import sys
@@ -12,9 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import torch
 import xarray as xr
-import yaml
 
-from src.data import _restore_crs
+from src.data import _restore_crs, load_config
 from src.model import BurnScarModel
 from src.utils import get_device, water_mask
 from run_inference import run_inference
@@ -39,7 +34,7 @@ def main():
     ap.add_argument("--threshold", type=float, default=0.5)
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(open(args.config))
+    cfg = load_config(args.config)
     bands = cfg["data"]["bands"]
     ps = cfg["data"]["patch_size"]
     dnbr_t = cfg["data"].get("dnbr_threshold", 0.10)
@@ -56,9 +51,14 @@ def main():
 
     results = {}
     for ckpt in args.checkpoints:
-        model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
-                              in_channels=cfg["model"]["in_channels"])
         state = torch.load(ckpt, map_location=device, weights_only=False)
+        # Build the encoder version this checkpoint was trained with (stored in
+        # its config) so a 2.0 checkpoint loads correctly. Bands are the same
+        # physical HLS bands for both versions, so the cached scenes work as-is.
+        ck_ver = state.get("config", {}).get("model", {}).get("prithvi_version", "1.0")
+        model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
+                              in_channels=cfg["model"]["in_channels"],
+                              prithvi_version=ck_ver)
         model.load_state_dict(state["model_state_dict"])
         model = model.to(device)
         label = ckpt.split("/")[-2]
@@ -68,6 +68,7 @@ def main():
             pred, true, image = run_inference(
                 model, post, pre, bands=bands, patch_size=ps, device=device,
                 dnbr_threshold=dnbr_t, pred_threshold=args.threshold,
+                prithvi_version=ck_ver,
             )
             # Same NDWI water exclusion as the deployed pipeline.
             water = water_mask(post)

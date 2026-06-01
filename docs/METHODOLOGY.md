@@ -11,8 +11,15 @@ The repo carries two configs that share one fire registry but differ in intent:
 | | `train_config.yaml` (deployed baseline) | `finetune_config.yaml` (staged) |
 |---|---|---|
 | Encoder | Prithvi 1.0-100M, **frozen** | Prithvi 2.0-300M, gradual unfreeze |
-| Bands | B02,B03,B04,B8A,B11,B12 | B02,B03,B04,B05,B06,B07 |
+| Bands | B02,B03,B04,B8A,B11,B12 | same (see note) |
 | Brightness gain | yes (1.0) | none yet (verify first) |
+
+Both versions use the **same 6 physical HLS bands** (Blue, Green, Red, NIR,
+SWIR1, SWIR2 = Sentinel B02,B03,B04,B8A,B11,B12). Prithvi 2.0's `config.json`
+labels NIR/SWIR1/SWIR2 with Landsat names (B05/B06/B07), but against the HLSS30
+product we read the equivalent Sentinel bands. Only the normalization stats (and
+architecture) differ between versions, so the 2.0 run reuses the existing
+caches — no re-download.
 | Val split | random 90/10 patch split | fire-based (hold out carr + holy) |
 | Loss | CE weights [0.3, 0.7] + Dice | CE [0.5, 0.5] + Dice |
 | Epochs | 8 | 16 |
@@ -51,7 +58,7 @@ Current split: 37 train fires, 3 held-out test fires.
 | Arch | ViT-Base, embed 768, depth 12 | ViT-Large, embed 1024, depth 24 |
 | Frames | 3 | 4 |
 | Pretrain corpus | ~640k HLS scenes | ~4.2M HLS scenes (larger/more diverse) |
-| Bands | B02,B03,B04,B8A,B11,B12 | B02,B03,B04,B05,B06,B07 |
+| Bands (physical) | Blue,Green,Red,NIR,SWIR1,SWIR2 | same |
 | FPN feature layers | [2,4,7,11] | [5,11,17,23] |
 | Norm scale | 0–1 reflectance | raw DN / 10000 |
 

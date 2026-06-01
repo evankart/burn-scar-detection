@@ -3,9 +3,9 @@ data:
   - B02
   - B03
   - B04
-  - B05
-  - B06
-  - B07
+  - B8A
+  - B11
+  - B12
   patch_size: 224
   train_split: 0.9
   num_workers: 4

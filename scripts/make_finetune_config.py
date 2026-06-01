@@ -19,8 +19,8 @@ src = load_config("configs/train_config.yaml")
 src["data"].pop("fires", None)  # finetune config uses the explicit derived lists
 
 src["data"]["val_fires"] = ["carr_fire_2018", "holy_2018"]  # one NorCal + one SoCal, held out of training
-# Prithvi 2.0 uses B05/B06/B07 (broadband NIR + SWIR) instead of B8A/B11/B12
-src["data"]["bands"] = ["B02", "B03", "B04", "B05", "B06", "B07"]
+# Bands inherited from train_config (B02,B03,B04,B8A,B11,B12). Prithvi 2.0 uses
+# the same physical HLS bands as 1.0 — only the normalization stats differ.
 
 src["model"]["prithvi_version"] = "2.0"
 src["model"]["freeze_backbone"] = True
