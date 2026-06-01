@@ -12,6 +12,7 @@ uploads = [
     ("app.py", "app.py"),
     ("cloud/space_README.md", "README.md"),
     ("src/__init__.py", "src/__init__.py"),
+    ("src/utils.py", "src/utils.py"),
     ("src/visualize.py", "src/visualize.py"),
     ("src/model.py", "src/model.py"),
     ("src/data.py", "src/data.py"),

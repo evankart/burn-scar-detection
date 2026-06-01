@@ -17,13 +17,8 @@ import xarray as xr
 
 from src.data import _restore_crs, load_config
 from src.model import BurnScarModel
+from src.utils import get_device, water_mask
 from run_inference import run_inference
-
-
-def water_mask(post_ds, thr=0.0):
-    g = post_ds["B03"].values.astype(np.float32)
-    nir = post_ds["B8A"].values.astype(np.float32)
-    return (g - nir) / (g + nir + 1e-8) > thr
 
 
 def iou_pr(prob, true, valid, thr):
@@ -44,7 +39,7 @@ def main():
     cfg = load_config(args.config)
     bands = cfg["data"]["bands"]; ps = cfg["data"]["patch_size"]
     dnbr_t = cfg["data"].get("dnbr_threshold", 0.10); cache = cfg["data"]["cache_dir"]
-    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    device = get_device()
 
     model = BurnScarModel(num_classes=cfg["model"]["num_classes"], in_channels=cfg["model"]["in_channels"])
     model.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=False)["model_state_dict"])
