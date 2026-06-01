@@ -44,3 +44,16 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+
+[tool.pyright]
+# Resolve imports against the project venv (otherwise Pylance flags every
+# third-party import as unresolved).
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+# Silence false positives from untyped scientific libs: torch re-exports
+# from_numpy/softmax/tensor/float32 without listing them in __all__, and
+# numpy/rioxarray/earthaccess stubs under-declare array ops and accessors.
+reportPrivateImportUsage = "none"
+reportOperatorIssue = "none"
+reportAttributeAccessIssue = "none"

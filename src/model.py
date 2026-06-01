@@ -64,6 +64,7 @@ def _load_mae_class(repo: str, mae_file: str):
     """Download prithvi_mae.py from HuggingFace and import PrithviMAE."""
     mae_path = hf_hub_download(repo, mae_file)
     spec = importlib.util.spec_from_file_location("prithvi_mae", mae_path)
+    assert spec and spec.loader, f"could not load module spec from {mae_path}"
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.PrithviMAE
