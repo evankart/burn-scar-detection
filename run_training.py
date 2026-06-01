@@ -84,6 +84,9 @@ def main():
                         help="Override CE class weights, e.g. --class-weights 0.5 0.5")
     parser.add_argument("--prithvi-version", default=None, choices=["1.0", "2.0"],
                         help="Override Prithvi encoder version (default from config)")
+    parser.add_argument("--download-only", action="store_true",
+                        help="Download/cache all regions then exit (no training). "
+                             "Lets a brightness diagnostic run before GPU hours.")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -114,6 +117,11 @@ def main():
     logger.info(f"Train fires: {[r['name'] for r in train_regions]}")
     logger.info(f"Test fires:  {[r['name'] for r in test_regions]}")
     downloaded = download_regions(all_regions, args.config)
+
+    if args.download_only:
+        logger.info(f"--download-only: cached {len(downloaded)}/{len(all_regions)} "
+                    f"regions. Exiting before training.")
+        return
 
     # --- 2. Build train patches (fire-based split, test fires excluded) ---
     logger.info("=== Preprocessing train fires ===")
