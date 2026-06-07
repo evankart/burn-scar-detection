@@ -208,7 +208,10 @@ class BurnScarModel(nn.Module):
         # satisfy the encoder's (B, C, T, H, W) input shape.
         x = pixel_values.unsqueeze(2).expand(-1, -1, self._num_frames, -1, -1).contiguous()
 
-        all_features = self.encoder.forward_features(x)
+        # If encoder is frozen, skip the autograd tape entirely — saves GPU memory.
+        encoder_ctx = torch.no_grad() if not next(self.encoder.parameters()).requires_grad else torch.enable_grad()
+        with encoder_ctx:
+            all_features = self.encoder.forward_features(x)
 
         layer_features = [
             self._reshape_encoder_output(all_features[i], B, h, w)

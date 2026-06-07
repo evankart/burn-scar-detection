@@ -147,7 +147,9 @@ class Trainer:
     def train_epoch(self, epoch: int) -> dict:
         self.model.train()
         total_loss = 0.0
-        all_preds, all_labels = [], []
+        # Accumulate confusion-matrix counts instead of storing all predictions,
+        # so memory stays O(1) rather than O(dataset_size).
+        tp = fp = fn = tn = 0
 
         for batch_idx, batch in enumerate(self.dataloaders["train"]):
             images = batch["pixel_values"].to(self.device)
@@ -161,24 +163,35 @@ class Trainer:
             self.optimizer.step()
 
             total_loss += loss.item()
-            preds = logits.argmax(dim=1).cpu().numpy()
-            all_preds.append(preds)
-            all_labels.append(labels.cpu().numpy())
+            with torch.no_grad():
+                preds = logits.argmax(dim=1)
+                tp += ((preds == 1) & (labels == 1)).sum().item()
+                fp += ((preds == 1) & (labels == 0)).sum().item()
+                fn += ((preds == 0) & (labels == 1)).sum().item()
+                tn += ((preds == 0) & (labels == 0)).sum().item()
 
             if batch_idx % self.config["logging"]["log_every_n_steps"] == 0:
                 logger.info(f"Epoch {epoch} [{batch_idx}/{len(self.dataloaders['train'])}] loss={loss.item():.4f}")
 
-        all_preds = np.concatenate(all_preds)
-        all_labels = np.concatenate(all_labels)
-        metrics = compute_metrics(all_preds, all_labels, num_classes=self.model.num_classes)
-        metrics["loss"] = total_loss / len(self.dataloaders["train"])
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        total     = tp + fp + fn + tn
+        iou_burn  = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else float("nan")
+        iou_bg    = tn / (tn + fp + fn) if (tn + fp + fn) > 0 else float("nan")
+        metrics = {
+            "loss": total_loss / len(self.dataloaders["train"]),
+            "pixel_accuracy": (tp + tn) / total if total > 0 else 0.0,
+            "mean_iou": float(np.nanmean([iou_burn, iou_bg])),
+            "f1_burn_scar": f1,
+        }
         return metrics
 
     @torch.no_grad()
     def validate(self) -> dict:
         self.model.eval()
         total_loss = 0.0
-        all_preds, all_labels = [], []
+        tp = fp = fn = tn = 0
 
         for batch in self.dataloaders["val"]:
             images = batch["pixel_values"].to(self.device)
@@ -187,14 +200,24 @@ class Trainer:
             loss = self.criterion(logits, labels)
 
             total_loss += loss.item()
-            all_preds.append(logits.argmax(dim=1).cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
+            preds = logits.argmax(dim=1)
+            tp += ((preds == 1) & (labels == 1)).sum().item()
+            fp += ((preds == 1) & (labels == 0)).sum().item()
+            fn += ((preds == 0) & (labels == 1)).sum().item()
+            tn += ((preds == 0) & (labels == 0)).sum().item()
 
-        all_preds = np.concatenate(all_preds)
-        all_labels = np.concatenate(all_labels)
-        metrics = compute_metrics(all_preds, all_labels, num_classes=self.model.num_classes)
-        metrics["loss"] = total_loss / len(self.dataloaders["val"])
-        return metrics
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        total     = tp + fp + fn + tn
+        iou_burn  = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else float("nan")
+        iou_bg    = tn / (tn + fp + fn) if (tn + fp + fn) > 0 else float("nan")
+        return {
+            "loss": total_loss / len(self.dataloaders["val"]),
+            "pixel_accuracy": (tp + tn) / total if total > 0 else 0.0,
+            "mean_iou": float(np.nanmean([iou_burn, iou_bg])),
+            "f1_burn_scar": f1,
+        }
 
     def train(self) -> dict:
         logger.info(f"Training on {self.device} for {self.tc['epochs']} epochs")
