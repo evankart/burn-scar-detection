@@ -1,21 +1,30 @@
 # Wildfire Burn Scar Detection
 
-Burn scar segmentation from Harmonized Landsat Sentinel-2 (HLS) satellite imagery using **Prithvi-EO-1.0-100M** — the IBM × NASA geospatial foundation model — with an FPN decoder trained for pixel-level segmentation.
+Burn scar segmentation from Harmonized Landsat Sentinel-2 (HLS) satellite imagery using **Prithvi-EO-2.0-300M** — the IBM × NASA geospatial foundation model — fine-tuned with an FPN decoder for pixel-level segmentation.
 
 **Live demo:** [huggingface.co/spaces/evankart/burn-scar-detection](https://huggingface.co/spaces/evankart/burn-scar-detection)
 
-Trained on **37 wildfires across 5 US states** (CA, OR, AZ, NM, WA), evaluated on 3 held-out fires in different biomes. **Macro IoU 0.64** on the held-out test fires, at a decision threshold fixed *a priori* (never tuned on the test set).
+Trained on **37 wildfires across 5 US states** (CA, OR, AZ, NM, WA), evaluated on 3 held-out fires in different biomes. **Macro IoU 0.645** on the held-out test fires, at a decision threshold fixed *a priori* (never tuned on the test set).
 
 ## Results (held-out test fires, fixed 0.5 threshold)
 
 | Fire | Year | Biome | Precision | Recall | IoU |
 |---|---|---|---|---|---|
-| Woolsey | 2018 | SoCal coastal chaparral | 76% | 94% | **73%** |
-| East Troublesome | 2020 | CO Rockies subalpine conifer | 56% | 80% | **49%** |
-| Thomas | 2017 | CA coastal mountains | 96% | 71% | **69%** |
-| **Macro** | | | **76%** | **82%** | **64%** |
+| Woolsey | 2018 | SoCal coastal chaparral | 75% | 88% | **68%** |
+| East Troublesome | 2020 | CO Rockies subalpine conifer | 75% | 74% | **59%** |
+| Thomas | 2017 | CA coastal mountains | 89% | 73% | **67%** |
+| **Macro** | | | **80%** | **78%** | **64.5%** |
 
 These three fires are held out of training entirely and span deliberately different biomes from much of the training set, so the numbers reflect cross-biome generalization, not memorization.
+
+### Model comparison (Prithvi 1.0 vs 2.0, fixed 0.5 threshold)
+
+| Model | Woolsey IoU | East Troublesome IoU | Thomas IoU | Macro IoU |
+|---|---|---|---|---|
+| Prithvi-EO-1.0-100M (frozen encoder + FPN) | 0.729 | 0.489 | 0.688 | 0.635 |
+| **Prithvi-EO-2.0-300M (fine-tuned + FPN)** | **0.677** | **0.594** | **0.665** | **0.645** |
+
+The 2.0 model's main gain is on East Troublesome (+10.5 IoU) — the hardest fire, a subalpine Colorado fire underrepresented in the training distribution. The larger encoder generalizes better across biomes. Woolsey and Thomas regress slightly as the 2.0 model is more precision-balanced and less recall-dominant than the 1.0 baseline.
 
 ## Architecture
 
@@ -76,9 +85,9 @@ Woolsey precision 0.53 → 0.76; Thomas precision 0.70 → 0.96.
 
 **A subtlety worth noting:** retraining the decoder on gain-corrected input scored *worse* than applying the gain to the existing model. The decoder trained on the harder, dark input learned a more conservative boundary that generalizes best once it's given clean in-domain features at inference — so the deployment intentionally keeps the original checkpoint with the gain applied at serving time.
 
-## Staged: Prithvi 2.0 fine-tune (not yet run)
+## Prithvi 2.0 fine-tune
 
-Infrastructure is in place to fine-tune **Prithvi-EO-2.0-300M** (`configs/finetune_config.yaml`): a version registry in `src/model.py`, layer-wise LR decay + gradual unfreeze in `src/train.py`, a fire-based validation split, and a self-terminating AWS GPU job (`cloud/run_job.sh`, `cloud/RUNBOOK.md`). Prithvi 2.0 uses the same six physical HLS bands as 1.0 — only the normalization stats and architecture differ — and `scripts/band_stats_v2.py` verifies the 2.0 stats / brightness gain before training. This run is pending AWS GPU quota; the deployed model remains the frozen 1.0 + gain baseline.
+**Prithvi-EO-2.0-300M** fine-tuned on the same 37-fire training set (`configs/finetune_config.yaml`): frozen encoder for epochs 1–2 (decoder warmup), then gradual unfreeze with layer-wise LR decay (LLRD decay=0.75, backbone LR multiplier=0.05). Early stopping at epoch 8. Trained on a g5.xlarge (A10G 24GB) on AWS, checkpoint at `checkpoints/finetune_v2/best_model.pt`. The deployed HF Space now serves this model.
 
 ## Project structure
 
