@@ -169,15 +169,47 @@ def _load_model():
 
 
 @st.cache_data(show_spinner=False)
+def _fetch_available_dates(bbox: tuple, center_date: str,
+                           before_days: int = 14, after_days: int = 14) -> list[dict]:
+    """Return S2 scene dates within before_days/after_days of center_date, with cloud cover."""
+    import pystac_client
+    import planetary_computer
+    from datetime import datetime, timedelta
+    catalog = pystac_client.Client.open(
+        "https://planetarycomputer.microsoft.com/api/stac/v1",
+        modifier=planetary_computer.sign_inplace,
+    )
+    dt = datetime.strptime(center_date, "%Y-%m-%d")
+    start = (dt - timedelta(days=before_days)).strftime("%Y-%m-%d")
+    end = min(dt + timedelta(days=after_days), datetime.utcnow() - timedelta(days=3))
+    if end.strftime("%Y-%m-%d") <= start:
+        return []
+    items = list(catalog.search(
+        collections=["sentinel-2-l2a"],
+        bbox=bbox,
+        datetime=f"{start}/{end.strftime('%Y-%m-%d')}",
+        max_items=200,
+    ).items())
+    by_date: dict = {}
+    for item in items:
+        d = item.datetime.strftime("%Y-%m-%d")
+        cc = round(item.properties.get("eo:cloud_cover", 100), 1)
+        if d not in by_date or cc < by_date[d]:
+            by_date[d] = cc
+    return sorted(
+        [{"date": d, "cloud_cover": cc} for d, cc in by_date.items()],
+        key=lambda x: x["date"], reverse=True,
+    )
+
+
+@st.cache_data(show_spinner=False)
 def _fetch_scene_cached(bbox: tuple, post_date: str) -> dict:
-    """Find the best Sentinel-2 scene and return a tile URL — no data download."""
     from src.infer import fetch_preview_tiles
     return fetch_preview_tiles(bbox, post_date)
 
 
 @st.cache_data(show_spinner=False)
 def run_detection(bbox: tuple, post_date: str) -> dict:
-    """Cached so re-running the same AOI/date is instant."""
     from src.infer import detect_burn_scar
     model, device, cfg = _load_model()
     return detect_burn_scar(bbox, post_date, model, device, cfg)
@@ -194,29 +226,45 @@ def _aoi_area_km2(bbox: tuple) -> float:
 def custom_detection_view():
     st.subheader("Detect burn scars on a custom area")
     st.markdown(
-        "**1.** Search or zoom to a location · **2.** Draw a rectangle on the map · "
-        "**3.** Pick a post-fire date · **4.** Preview the satellite scene · **5.** Run detection.  \n"
+        "**1.** Draw a rectangle on the map · **2.** Pick a scene from available dates · "
+        "**3.** Preview the satellite image · **4.** Run detection.  \n"
         "_The model runs on a single post-fire HLS scene — no before/after comparison._"
     )
     post_date = st.date_input(
-        "Post-fire date",
+        "Search window end",
         value=date.today(), min_value=date(2015, 7, 1), max_value=date.today(),
         format="YYYY-MM-DD",
-        help="The app finds the least-cloudy Sentinel-2 scene within ~30 days after this date.",
+        help="Available Sentinel-2 scenes from the 60 days before this date will be listed below.",
     )
     days_ago = (date.today() - post_date).days
-    if days_ago < 5:
+    if days_ago < 3:
         st.warning(
             f"Date is {days_ago} day{'s' if days_ago != 1 else ''} ago — "
-            "Sentinel-2 data may not be processed yet. Try a date at least 5 days in the past."
+            "Sentinel-2 data takes 1–3 days to process and reach the archive. "
+            "Try an earlier date."
         )
 
-    # zoom_pending: set whenever content changes; popped each render to fire once
+    # Reset scene selection when window date changes
+    if post_date.isoformat() != st.session_state.get("aoi_post_date"):
+        st.session_state["aoi_post_date"] = post_date.isoformat()
+        st.session_state.pop("aoi_scene_date", None)
+        st.session_state.pop("aoi_show_more_dates", None)
+        st.session_state.pop("aoi_zoom_count", None)
+        st.session_state.pop("scene_preview", None)
+        st.session_state.pop("detection_result", None)
+
     zoom_pending = st.session_state.pop("aoi_zoom_pending", False)
 
-    # --- Base map (never reloads — preview/detection layers injected dynamically) ---
+    # --- Base map ---
     preview = st.session_state.get("scene_preview")
     bbox = st.session_state.get("aoi_bbox")
+
+    # Remove fill from drawn shapes so the satellite image shows through.
+    st.markdown(
+        "<style>.leaflet-pane.leaflet-overlay-pane svg path.leaflet-interactive"
+        "{fill:none!important}</style>",
+        unsafe_allow_html=True,
+    )
 
     m = folium.Map(location=[39.0, -120.5], zoom_start=6, tiles=None, control_scale=True)
     folium.TileLayer(
@@ -230,26 +278,27 @@ def custom_detection_view():
         edit_options={"edit": False, "remove": True},
     ).add_to(m)
 
-    # Build feature group to inject without reloading the map
     detection_early = st.session_state.get("detection_result")
     fg = folium.FeatureGroup(name="overlay")
-    map_center = None
-    map_zoom = None
 
+    # Increment a counter each time zoom is needed so the map key changes,
+    # forcing a fresh component render that picks up m.fit_bounds().
+    zoom_count = st.session_state.get("aoi_zoom_count", 0)
     if zoom_pending and bbox:
-        if detection_early:
-            b = detection_early["bounds"]
-        else:
-            min_lon, min_lat, max_lon, max_lat = bbox
-            b = [[min_lat, min_lon], [max_lat, max_lon]]
-        s, w = b[0]; n, e = b[1]
-        map_center = ((s + n) / 2, (w + e) / 2)
-        span = max(n - s, e - w)
-        map_zoom = max(1, min(14, int(math.log2(360 / span)) - 1))
+        min_lon, min_lat, max_lon, max_lat = bbox
+        m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=[20, 20])
+        zoom_count += 1
+        st.session_state["aoi_zoom_count"] = zoom_count
 
     if detection_early:
         create_sentinel_overlay(detection_early["image"], detection_early["bounds"]).add_to(fg)
         create_folium_overlay(detection_early["pred_mask"], detection_early["bounds"], opacity=0.6).add_to(fg)
+        if bbox:
+            min_lon, min_lat, max_lon, max_lat = bbox
+            folium.Rectangle(
+                bounds=[[min_lat, min_lon], [max_lat, max_lon]],
+                color="#3388ff", weight=2, fill=False,
+            ).add_to(fg)
     elif preview and bbox:
         min_lon, min_lat, max_lon, max_lat = bbox
         folium.raster_layers.ImageOverlay(
@@ -257,17 +306,18 @@ def custom_detection_view():
             bounds=[[min_lat, min_lon], [max_lat, max_lon]],
             opacity=1.0,
         ).add_to(fg)
+        folium.Rectangle(
+            bounds=[[min_lat, min_lon], [max_lat, max_lon]],
+            color="#3388ff", weight=2, fill=False,
+        ).add_to(fg)
 
     out = st_folium(
-        m, key="draw_map",
+        m, key=f"draw_map_{zoom_count}",
         feature_group_to_add=fg,
-        center=map_center,
-        zoom=map_zoom,
         use_container_width=True, height=500,
         returned_objects=["last_active_drawing"],
     )
 
-    # Capture drawn shape → bbox; clear preview if AOI/date changed.
     draw = (out or {}).get("last_active_drawing")
     if draw and draw.get("geometry", {}).get("type") == "Polygon":
         ring = draw["geometry"]["coordinates"][0]
@@ -275,7 +325,9 @@ def custom_detection_view():
         new_bbox = (min(lons), min(lats), max(lons), max(lats))
         if new_bbox != st.session_state.get("aoi_bbox"):
             st.session_state["aoi_bbox"] = new_bbox
-            st.session_state["aoi_zoom_pending"] = True
+            st.session_state.pop("aoi_scene_date", None)
+            st.session_state.pop("aoi_show_more_dates", None)
+            st.session_state.pop("aoi_zoom_count", None)
             st.session_state.pop("scene_preview", None)
             st.session_state.pop("detection_result", None)
             preview = None
@@ -286,25 +338,69 @@ def custom_detection_view():
         return
 
     area = _aoi_area_km2(bbox)
-    rounded = (tuple(round(b, 4) for b in bbox), post_date.isoformat())
+    if area > 10000:
+        st.warning("Large area — download and inference will be slow. A smaller AOI (under ~10,000 km²) is recommended.")
+
+    # --- Scene date selection ---
+    show_more = st.session_state.get("aoi_show_more_dates", False)
+    before, after = (60, 14) if show_more else (14, 14)
+    with st.spinner("Checking available scenes…"):
+        available = _fetch_available_dates(bbox, post_date.isoformat(), before, after)
+
+    if not available:
+        st.warning("No Sentinel-2 scenes found within 2 weeks of this date for this area.")
+        if not show_more:
+            if st.button("Search wider window (±60 days)"):
+                st.session_state["aoi_show_more_dates"] = True
+                st.rerun()
+        return
+
+    def _scene_label(s):
+        cc = s["cloud_cover"]
+        icon = "🟢" if cc <= 20 else ("🟡" if cc <= 50 else "🔴")
+        return f"{s['date']}  {icon}  {cc:.0f}% cloud cover"
+
+    scene_dates = [s["date"] for s in available]
+    best_idx = min(range(len(available)), key=lambda i: available[i]["cloud_cover"])
+    stored = st.session_state.get("aoi_scene_date")
+    default_idx = scene_dates.index(stored) if stored in scene_dates else best_idx
+
+    selected_scene = st.selectbox(
+        "Available Sentinel-2 scenes",
+        options=scene_dates,
+        index=default_idx,
+        format_func=lambda d: _scene_label(next(s for s in available if s["date"] == d)),
+        help="Scenes from the 60 days before your window date. 🟢 ≤20% cloud · 🟡 20–50% · 🔴 >50%",
+    )
+
+    if selected_scene != st.session_state.get("aoi_scene_date"):
+        st.session_state["aoi_scene_date"] = selected_scene
+        st.session_state.pop("scene_preview", None)
+        st.session_state.pop("detection_result", None)
+
+    if not show_more:
+        if st.button("Show more dates (±60 days)", use_container_width=False):
+            st.session_state["aoi_show_more_dates"] = True
+            st.rerun()
+    else:
+        if st.button("Show fewer dates (±2 weeks)", use_container_width=False):
+            st.session_state["aoi_show_more_dates"] = False
+            st.rerun()
+
+    rounded = (tuple(round(b, 4) for b in bbox), selected_scene)
     preview = st.session_state.get("scene_preview")
 
-    # Invalidate preview if bbox or date changed.
     if preview and preview.get("_key") != rounded:
         preview = None
         st.session_state.pop("scene_preview", None)
         st.session_state.pop("detection_result", None)
 
-    if area > 10000:
-        st.warning("Large area — download and inference will be slow. A smaller AOI "
-                   "(under ~10,000 km²) is recommended.")
-
-    # --- Stage 1: Preview scene ---
+    # --- Stage 1: Preview ---
     if preview is None:
         st.caption(f"AOI ≈ {area:,.0f} km²")
         if st.button("🛰 Preview satellite scene", type="secondary"):
             try:
-                with st.spinner("Finding best Sentinel-2 scene…"):
+                with st.spinner("Fetching scene…"):
                     p = _fetch_scene_cached(*rounded)
                     p["_key"] = rounded
                     st.session_state["scene_preview"] = p
@@ -312,22 +408,15 @@ def custom_detection_view():
                     st.session_state.pop("detection_result", None)
                 st.rerun()
             except Exception as e:
-                st.error(f"Could not find a scene: {e}")
+                st.error(f"Could not load scene: {e}")
         return
-
-    # Hide the drawn shape outline now that the image fills the bbox.
-    st.markdown(
-        "<style>.leaflet-pane.leaflet-overlay-pane svg path.leaflet-interactive"
-        "{display:none!important}</style>",
-        unsafe_allow_html=True,
-    )
 
     cc = preview.get("cloud_cover", "?")
     st.caption(
         f"Scene acquired **{preview['scene_date']}** · {cc}% cloud cover · AOI ≈ {area:,.0f} km²"
     )
     if isinstance(cc, (int, float)) and cc > 20:
-        st.warning(f"Cloud cover is {cc}% — image may be partially obscured. Try a different date.")
+        st.warning(f"Cloud cover is {cc}% — image may be partially obscured.")
 
     col1, col2 = st.columns([1, 3])
     with col1:
@@ -336,7 +425,7 @@ def custom_detection_view():
             st.session_state.pop("detection_result", None)
             st.rerun()
 
-    # --- Stage 2: Run detection ---
+    # --- Stage 2: Detection ---
     detection = st.session_state.get("detection_result")
 
     if detection is None:
@@ -346,7 +435,6 @@ def custom_detection_view():
                     with st.spinner("Running the model (~1–2 min)…"):
                         res = run_detection(*rounded)
                         st.session_state["detection_result"] = res
-                        st.session_state["aoi_zoom_pending"] = True
                     st.rerun()
                 except Exception as e:
                     st.error(f"Detection failed: {e}")
