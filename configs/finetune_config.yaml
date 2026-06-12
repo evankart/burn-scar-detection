@@ -5,10 +5,7 @@ extends: train_config.yaml
 data:
   # Hold out whole fires for validation (fire-based split, not random patches).
   val_fires: ["carr_fire_2018", "holy_2018"]
-  # Bands are inherited: Prithvi 2.0 uses the same 6 physical HLS bands as 1.0.
-
 model:
-  prithvi_version: "2.0"
   freeze_backbone: true
   unfreeze_after_epoch: 2   # decoder-only warmup, then unfreeze the encoder
 

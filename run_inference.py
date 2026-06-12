@@ -95,7 +95,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", required=True, help="Region name or 'all'")
     parser.add_argument("--config", default="configs/train_config.yaml")
-    parser.add_argument("--checkpoint", default="checkpoints/balanced_chaparral/best_model.pt")
+    parser.add_argument("--checkpoint", default="checkpoints/finetune_v2/best_model.pt")
     args = parser.parse_args()
 
     config = load_config(args.config)

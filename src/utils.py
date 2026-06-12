@@ -55,7 +55,7 @@ def cloud_over_water_mask(
     swir_band: str = "B11",
     green_band: str = "B03",
     blue_threshold: float = 0.10,
-    mndwi_threshold: float = -0.2,
+    mndwi_threshold: float = -0.4,
 ) -> np.ndarray:
     """Boolean mask for cloud/fog pixels over water.
 
