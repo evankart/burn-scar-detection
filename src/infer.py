@@ -143,11 +143,15 @@ def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> d
         r = req.get(crop_url, timeout=30)
         if r.status_code != 200:
             continue
-        arr = np.array(PILImage.open(io.BytesIO(r.content)).convert("RGBA"))
+        img = PILImage.open(io.BytesIO(r.content)).convert("RGBA")
         if composite is None:
-            composite = arr.copy()
+            composite = np.array(img)
         else:
-            # Fill transparent/black holes from this tile
+            # Resize to match composite if titiler returns off-by-one dimensions
+            # due to per-tile reprojection rounding.
+            if img.size != (composite.shape[1], composite.shape[0]):
+                img = img.resize((composite.shape[1], composite.shape[0]), PILImage.LANCZOS)
+            arr = np.array(img)
             empty = (composite[..., :3].sum(axis=-1) == 0) | (composite[..., 3] == 0)
             composite[empty] = arr[empty]
 
