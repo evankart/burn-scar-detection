@@ -68,11 +68,91 @@ def _bounds_latlon(post_ds) -> list:
             [float(np.max(lat)), float(np.max(lon))]]
 
 
+_RGB_BANDS = ["B04", "B03", "B02"]
+_PC_STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
+_PC_TILES = "https://planetarycomputer.microsoft.com/api/data/v1/item/tiles/WebMercatorQuad/{z}/{x}/{y}@1x"
+
+
+def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> dict:
+    """Find the best Sentinel-2 scene and return a cropped RGB PNG clipped to bbox.
+
+    Uses PC STAC to find the scene (~1s), then titiler.xyz to crop server-side (~2s).
+    Returns {image_b64, scene_date, cloud_cover}.
+    """
+    import base64
+    import pystac_client
+    import planetary_computer
+    import requests as req
+
+    catalog = pystac_client.Client.open(_PC_STAC, modifier=planetary_computer.sign_inplace)
+    end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
+    search = catalog.search(
+        collections=["sentinel-2-l2a"],
+        bbox=bbox,
+        datetime=f"{post_date}/{end}",
+        query={"eo:cloud_cover": {"lt": 20}},
+        sortby="+properties.eo:cloud_cover",
+        max_items=5,
+    )
+    items = list(search.items())
+    if not items:
+        raise ValueError("No clear Sentinel-2 scene found within ~30 days. Try a different date.")
+
+    item = items[0]
+    scene_date = item.datetime.strftime("%Y-%m-%d")
+    cloud_cover = round(item.properties.get("eo:cloud_cover", 0), 1)
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    visual_href = item.assets["visual"].href
+    crop_url = (
+        f"https://titiler.xyz/cog/bbox/{min_lon},{min_lat},{max_lon},{max_lat}.png"
+        f"?url={req.utils.quote(visual_href)}&max_size=1024"
+    )
+    r = req.get(crop_url, timeout=30)
+    r.raise_for_status()
+
+    return {
+        "image_b64": base64.b64encode(r.content).decode(),
+        "scene_date": scene_date,
+        "cloud_cover": cloud_cover,
+    }
+
+
+def fetch_scene(bbox: tuple, post_date: str, cfg, window_days: int = 30) -> dict:
+    """Download RGB-only preview scene — no inference, ~half the download of full detection.
+
+    Returns {image (3,H,W normalized R/G/B), bounds [[S,W],[N,E]], scene_date, n_scenes,
+             valid_frac, post_ds}.
+    Raises ValueError if no clear scene is found.
+    """
+    dl = HLSDownloader(config_path=_CONFIG)
+    # Temporarily override bands to RGB only for fast preview download.
+    dl.bands = _RGB_BANDS
+    end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
+    granules = dl.search_scenes(tuple(bbox), f"{post_date}/{end}", max_cloud_cover=20)
+    if not granules:
+        raise ValueError("No clear HLS scene found within ~30 days. Try another date or location.")
+    scene_date = _granule_date(granules[0])
+    post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
+    image = normalize_bands(post_ds, _RGB_BANDS)
+    valid_frac = float((~(np.isnan(image).any(axis=0) | (np.nan_to_num(image).max(axis=0) == 0))).mean())
+    return {
+        "image": image,
+        "bounds": _bounds_latlon(post_ds),
+        "scene_date": scene_date,
+        "n_scenes": len(granules),
+        "valid_frac": valid_frac,
+        "post_ds": post_ds,
+    }
+
+
 def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
                      window_days: int = 30, patch_size: int = 224,
-                     pred_threshold: float | None = None) -> dict:
+                     pred_threshold: float | None = None,
+                     prefetched: dict | None = None) -> dict:
     """
     bbox = (min_lon, min_lat, max_lon, max_lat); post_date = 'YYYY-MM-DD'.
+    Pass prefetched=fetch_scene(...) to skip the download step.
     Returns {pred_mask (H,W uint8), image (6,H,W normalized), bounds [[S,W],[N,E]],
              burned_frac, scene_date, n_scenes}.
     Raises ValueError if no clear scene is found.
@@ -81,17 +161,25 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if pred_threshold is None:
         pred_threshold = cfg["data"].get("pred_threshold", 0.5)
 
-    dl = HLSDownloader(config_path=_CONFIG)
-    end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
-    granules = dl.search_scenes(tuple(bbox), f"{post_date}/{end}", max_cloud_cover=20)
-    if not granules:
-        raise ValueError("No clear HLS scene found for that area within ~30 days of "
-                         "the date. Try another date or location.")
-    # search_scenes sorts least-cloudy first → granules[0] is the primary scene.
-    scene_date = _granule_date(granules[0])
-    post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
+    if prefetched is not None:
+        image = prefetched["image"]
+        post_ds = prefetched["post_ds"]
+        scene_date = prefetched["scene_date"]
+        n_scenes = prefetched["n_scenes"]
+        bounds = prefetched["bounds"]
+    else:
+        dl = HLSDownloader(config_path=_CONFIG)
+        end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
+        granules = dl.search_scenes(tuple(bbox), f"{post_date}/{end}", max_cloud_cover=20)
+        if not granules:
+            raise ValueError("No clear HLS scene found for that area within ~30 days of "
+                             "the date. Try another date or location.")
+        scene_date = _granule_date(granules[0])
+        n_scenes = len(granules)
+        post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
+        image = normalize_bands(post_ds, bands)
+        bounds = _bounds_latlon(post_ds)
 
-    image = normalize_bands(post_ds, bands)  # brightness gain applied here
     _, h, w = image.shape
 
     pad_h, pad_w = max(0, patch_size - h), max(0, patch_size - w)
@@ -142,8 +230,8 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     return {
         "pred_mask": pred,
         "image": image,
-        "bounds": _bounds_latlon(post_ds),
+        "bounds": bounds,
         "burned_frac": burned_frac,
-        "n_scenes": len(granules),
+        "n_scenes": n_scenes,
         "scene_date": scene_date,
     }
