@@ -76,8 +76,6 @@ def main():
     parser.add_argument("--tversky-beta", type=float, default=None)
     parser.add_argument("--class-weights", type=float, nargs=2, default=None,
                         help="Override CE class weights, e.g. --class-weights 0.5 0.5")
-    parser.add_argument("--prithvi-version", default=None, choices=["1.0", "2.0"],
-                        help="Override Prithvi encoder version (default from config)")
     parser.add_argument("--download-only", action="store_true",
                         help="Download/cache all regions then exit (no training). "
                              "Lets a brightness diagnostic run before GPU hours.")
@@ -91,8 +89,6 @@ def main():
         config["training"]["tversky_beta"] = args.tversky_beta
     if args.class_weights is not None:
         config["training"]["class_weights"] = list(args.class_weights)
-    if args.prithvi_version is not None:
-        config["model"]["prithvi_version"] = args.prithvi_version
     logger.info(
         f"Loss config — class_weights={config['training']['class_weights']}, "
         f"tversky_alpha={config['training'].get('tversky_alpha', 0.5)}, "
@@ -161,14 +157,11 @@ def main():
 
     # --- 4. Initialize model (downloads Prithvi weights on first run) ---
     logger.info("=== Initializing model ===")
-    prithvi_ver = config["model"].get("prithvi_version", "1.0")
     model = BurnScarModel(
         num_classes=config["model"]["num_classes"],
         in_channels=config["model"]["in_channels"],
         freeze_backbone=config["model"]["freeze_backbone"],
-        prithvi_version=prithvi_ver,
     )
-    logger.info(f"Prithvi version: {prithvi_ver}")
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Trainable parameters: {trainable:,}")
 

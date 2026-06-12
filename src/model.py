@@ -1,6 +1,4 @@
-"""Burn scar segmentation on Prithvi-EO encoders (1.0-100M / 2.0-300M) + an FPN
-decoder. Version is config-selectable; see README for the version
-comparison and rationale."""
+"""Burn scar segmentation on Prithvi-EO-2.0-300M + an FPN decoder."""
 
 import importlib.util
 import logging
@@ -11,51 +9,30 @@ from huggingface_hub import hf_hub_download
 
 logger = logging.getLogger(__name__)
 
-# ── Version registry ────────────────────────────────────────────────────────
+# ── Model config ────────────────────────────────────────────────────────────
 
-PRITHVI_VERSIONS = {
-    "1.0": {
-        "repo":        "ibm-nasa-geospatial/Prithvi-EO-1.0-100M",
-        "weights":     "Prithvi_EO_V1_100M.pt",
-        "mae_file":    "prithvi_mae.py",
-        "embed_dim":   768,
-        "depth":       12,
-        "num_heads":   12,
-        "num_frames":  3,
-        # Pretraining stats, HLS reflectance (0–1). A brightness gain is applied
-        # before z-scoring (see normalize_bands).
-        "mean": [0.077523, 0.108099, 0.122859, 0.249720, 0.220421, 0.161083],
-        "std":  [0.128153, 0.127003, 0.139948, 0.136834, 0.129168, 0.115451],
-        "feature_layers": [2, 4, 7, 11],  # FPN taps, evenly spaced over depth 12
-        "bands": ["B02", "B03", "B04", "B8A", "B11", "B12"],
-    },
-    "2.0": {
-        "repo":        "ibm-nasa-geospatial/Prithvi-EO-2.0-300M",
-        "weights":     "Prithvi_EO_V2_300M.pt",
-        "mae_file":    "prithvi_mae.py",
-        "embed_dim":   1024,
-        "depth":       24,
-        "num_heads":   16,
-        "num_frames":  4,
-        # Pretraining stats (raw DN / 10000), from Prithvi-EO-2.0-300M config,
-        # in the order Blue, Green, Red, NIR, SWIR1, SWIR2.
-        "mean": [0.10870, 0.13420, 0.14330, 0.27340, 0.19580, 0.13630],
-        "std":  [0.22480, 0.21790, 0.21780, 0.18500, 0.12420, 0.10490],
-        "feature_layers": [5, 11, 17, 23],  # FPN taps, every 6th of depth 24
-        # Same 6 physical HLS bands as 1.0. The 2.0 config.json labels NIR/SWIR1/
-        # SWIR2 with Landsat names (B05/B06/B07); against HLSS30 we read the
-        # equivalent Sentinel names B8A/B11/B12.
-        "bands": ["B02", "B03", "B04", "B8A", "B11", "B12"],
-    },
+PRITHVI_CFG = {
+    "repo":        "ibm-nasa-geospatial/Prithvi-EO-2.0-300M",
+    "weights":     "Prithvi_EO_V2_300M.pt",
+    "mae_file":    "prithvi_mae.py",
+    "embed_dim":   1024,
+    "depth":       24,
+    "num_heads":   16,
+    "num_frames":  4,
+    # Pretraining stats (raw DN / 10000), from Prithvi-EO-2.0-300M config,
+    # in the order Blue, Green, Red, NIR, SWIR1, SWIR2.
+    "mean": [0.10870, 0.13420, 0.14330, 0.27340, 0.19580, 0.13630],
+    "std":  [0.22480, 0.21790, 0.21780, 0.18500, 0.12420, 0.10490],
+    "feature_layers": [5, 11, 17, 23],  # FPN taps, every 6th of depth 24
+    # config.json labels NIR/SWIR1/SWIR2 with Landsat names (B05/B06/B07);
+    # against HLSS30 we read the equivalent Sentinel names B8A/B11/B12.
+    "bands": ["B02", "B03", "B04", "B8A", "B11", "B12"],
 }
 
-# Default version used by existing code / deployed model.
-DEFAULT_VERSION = "1.0"
-
 # Convenience aliases (used by normalize_bands in data.py).
-PRITHVI_MEAN = PRITHVI_VERSIONS[DEFAULT_VERSION]["mean"]
-PRITHVI_STD  = PRITHVI_VERSIONS[DEFAULT_VERSION]["std"]
-FEATURE_LAYER_INDICES = PRITHVI_VERSIONS[DEFAULT_VERSION]["feature_layers"]
+PRITHVI_MEAN = PRITHVI_CFG["mean"]
+PRITHVI_STD  = PRITHVI_CFG["std"]
+FEATURE_LAYER_INDICES = PRITHVI_CFG["feature_layers"]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -79,7 +56,7 @@ class FPNDecoder(nn.Module):
     All ViT layers produce the same 14×14 spatial resolution, but encode
     different levels of abstraction. FPN fuses them via top-down lateral
     connections (deepest → shallowest), then upsamples to pixel resolution.
-    Works with any embed_dim (768 for 1.0, 1024 for 2.0).
+    Works with embed_dim=1024 (Prithvi-EO-2.0-300M, ViT-Large).
     """
 
     def __init__(self, embed_dim: int = 768, num_classes: int = 2,
@@ -116,13 +93,9 @@ class FPNDecoder(nn.Module):
 # ── Main model ────────────────────────────────────────────────────────────────
 
 class BurnScarModel(nn.Module):
-    """
-    Prithvi-EO ViT encoder + FPN decoder for burn scar segmentation.
+    """Prithvi-EO-2.0-300M ViT encoder + FPN decoder for burn scar segmentation.
 
-    Supports Prithvi 1.0 (100M, ViT-Base) and 2.0 (300M, ViT-Large).
-    Select via prithvi_version='1.0' or '2.0'.
-
-    Input: (B, C, H, W) normalized bands — brightness-gained then z-scored.
+    Input: (B, C, H, W) normalized bands — z-scored with Prithvi 2.0 stats.
     Output: (B, num_classes, H, W) logits.
     """
 
@@ -131,19 +104,18 @@ class BurnScarModel(nn.Module):
         num_classes: int = 2,
         in_channels: int = 6,
         freeze_backbone: bool = False,
-        prithvi_version: str = DEFAULT_VERSION,
         **kwargs,
     ):
         super().__init__()
         self.num_classes = num_classes
 
-        cfg = PRITHVI_VERSIONS[prithvi_version]
+        cfg = PRITHVI_CFG
         embed_dim   = cfg["embed_dim"]
         num_frames  = cfg["num_frames"]
         self._feature_layers = cfg["feature_layers"]
         self._num_frames = num_frames
 
-        logger.info(f"Loading Prithvi-EO-{prithvi_version} encoder "
+        logger.info(f"Loading Prithvi-EO-2.0 encoder "
                     f"(embed_dim={embed_dim}, depth={cfg['depth']}, "
                     f"num_frames={num_frames})...")
 
@@ -166,7 +138,7 @@ class BurnScarModel(nn.Module):
         missing, unexpected = mae.load_state_dict(state, strict=False)
         if missing:
             logger.warning(f"Missing keys: {missing[:5]}...")
-        logger.info(f"Prithvi-EO-{prithvi_version} weights loaded")
+        logger.info("Prithvi-EO-2.0 weights loaded")
 
         self.encoder = mae.encoder
 
