@@ -204,6 +204,15 @@ def custom_detection_view():
         format="YYYY-MM-DD",
         help="The app finds the least-cloudy Sentinel-2 scene within ~30 days after this date.",
     )
+    days_ago = (date.today() - post_date).days
+    if days_ago < 5:
+        st.warning(
+            f"Date is {days_ago} day{'s' if days_ago != 1 else ''} ago — "
+            "Sentinel-2 data may not be processed yet. Try a date at least 5 days in the past."
+        )
+
+    # zoom_pending: set whenever content changes; popped each render to fire once
+    zoom_pending = st.session_state.pop("aoi_zoom_pending", False)
 
     # --- Base map (never reloads — preview/detection layers injected dynamically) ---
     preview = st.session_state.get("scene_preview")
@@ -226,17 +235,14 @@ def custom_detection_view():
     fg = folium.FeatureGroup(name="overlay")
     map_center = None
     map_zoom = None
-    import math
 
-    active_bounds = None
-    if detection_early and bbox:
-        active_bounds = detection_early["bounds"]
-    elif preview and bbox:
-        min_lon, min_lat, max_lon, max_lat = bbox
-        active_bounds = [[min_lat, min_lon], [max_lat, max_lon]]
-
-    if active_bounds:
-        s, w = active_bounds[0]; n, e = active_bounds[1]
+    if zoom_pending and bbox:
+        if detection_early:
+            b = detection_early["bounds"]
+        else:
+            min_lon, min_lat, max_lon, max_lat = bbox
+            b = [[min_lat, min_lon], [max_lat, max_lon]]
+        s, w = b[0]; n, e = b[1]
         map_center = ((s + n) / 2, (w + e) / 2)
         span = max(n - s, e - w)
         map_zoom = max(1, min(14, int(math.log2(360 / span)) - 1))
@@ -269,6 +275,7 @@ def custom_detection_view():
         new_bbox = (min(lons), min(lats), max(lons), max(lats))
         if new_bbox != st.session_state.get("aoi_bbox"):
             st.session_state["aoi_bbox"] = new_bbox
+            st.session_state["aoi_zoom_pending"] = True
             st.session_state.pop("scene_preview", None)
             st.session_state.pop("detection_result", None)
             preview = None
@@ -301,6 +308,7 @@ def custom_detection_view():
                     p = _fetch_scene_cached(*rounded)
                     p["_key"] = rounded
                     st.session_state["scene_preview"] = p
+                    st.session_state["aoi_zoom_pending"] = True
                     st.session_state.pop("detection_result", None)
                 st.rerun()
             except Exception as e:
@@ -338,6 +346,7 @@ def custom_detection_view():
                     with st.spinner("Running the model (~1–2 min)…"):
                         res = run_detection(*rounded)
                         st.session_state["detection_result"] = res
+                        st.session_state["aoi_zoom_pending"] = True
                     st.rerun()
                 except Exception as e:
                     st.error(f"Detection failed: {e}")
