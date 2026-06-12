@@ -251,10 +251,6 @@ def custom_detection_view():
             bounds=[[min_lat, min_lon], [max_lat, max_lon]],
             opacity=1.0,
         ).add_to(fg)
-        folium.Rectangle(
-            bounds=[[min_lat, min_lon], [max_lat, max_lon]],
-            color="#3388ff", weight=2, fill=False,
-        ).add_to(fg)
 
     out = st_folium(
         m, key="draw_map",
