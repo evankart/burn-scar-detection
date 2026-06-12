@@ -101,7 +101,7 @@ def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> d
             max_items=20,
         ).items())
 
-    items = _search(7) or _search(window_days)
+    items = _search(14) or _search(window_days)
     if not items:
         raise ValueError("No Sentinel-2 scene found within 30 days with <50% cloud cover. Try a different date.")
 
