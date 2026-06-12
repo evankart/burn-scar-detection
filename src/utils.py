@@ -28,16 +28,22 @@ def water_mask(
     threshold: float = 0.0,
     green_band: str = "B03",
     nir_band: str = "B8A",
+    swir_band: str = "B11",
 ) -> np.ndarray:
-    """Boolean NDWI water mask, NDWI = (green - NIR) / (green + NIR).
+    """Boolean water mask combining NDWI and MNDWI.
 
-    Open water is not burnable, yet both the post-only model and the dNBR label
-    produce spurious "burned" pixels over it (where NIR ≈ SWIR ≈ 0, NBR is pure
-    noise). Burn scars sit at NDWI ≤ 0 (NIR ≥ green), so a 0 cutoff removes
-    ocean/lakes without eating real burns. Deterministic and never tuned on the
-    test fires.
+    NDWI = (green - NIR) / (green + NIR) catches inland water.
+    MNDWI = (green - SWIR1) / (green + SWIR1) catches open ocean and coastal
+    water that NDWI misses when haze depresses NIR toward zero.
+    A pixel is masked if either index exceeds threshold.
     """
     green = ds[green_band].values.astype(np.float32)
     nir = ds[nir_band].values.astype(np.float32)
     ndwi = (green - nir) / (green + nir + 1e-8)
-    return ndwi > threshold
+
+    mndwi = np.zeros_like(ndwi)
+    if swir_band in ds:
+        swir = ds[swir_band].values.astype(np.float32)
+        mndwi = (green - swir) / (green + swir + 1e-8)
+
+    return (ndwi > threshold) | (mndwi > threshold)
