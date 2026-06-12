@@ -307,6 +307,13 @@ def custom_detection_view():
                 st.error(f"Could not find a scene: {e}")
         return
 
+    # Hide the drawn shape outline now that the image fills the bbox.
+    st.markdown(
+        "<style>.leaflet-pane.leaflet-overlay-pane svg path.leaflet-interactive"
+        "{display:none!important}</style>",
+        unsafe_allow_html=True,
+    )
+
     cc = preview.get("cloud_cover", "?")
     st.caption(
         f"Scene acquired **{preview['scene_date']}** · {cc}% cloud cover · AOI ≈ {area:,.0f} km²"
