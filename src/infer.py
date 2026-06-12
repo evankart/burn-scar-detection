@@ -88,18 +88,22 @@ def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> d
     from PIL import Image as PILImage
 
     catalog = pystac_client.Client.open(_PC_STAC, modifier=planetary_computer.sign_inplace)
-    end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
-    search = catalog.search(
-        collections=["sentinel-2-l2a"],
-        bbox=bbox,
-        datetime=f"{post_date}/{end}",
-        query={"eo:cloud_cover": {"lt": 20}},
-        sortby="+properties.eo:cloud_cover",
-        max_items=20,
-    )
-    items = list(search.items())
+    dt_start = datetime.strptime(post_date, "%Y-%m-%d")
+
+    def _search(days: int):
+        end = (dt_start + timedelta(days=days)).strftime("%Y-%m-%d")
+        return list(catalog.search(
+            collections=["sentinel-2-l2a"],
+            bbox=bbox,
+            datetime=f"{post_date}/{end}",
+            query={"eo:cloud_cover": {"lt": 50}},
+            sortby="+properties.eo:cloud_cover",
+            max_items=20,
+        ).items())
+
+    items = _search(7) or _search(window_days)
     if not items:
-        raise ValueError("No clear Sentinel-2 scene found within ~30 days. Try a different date.")
+        raise ValueError("No Sentinel-2 scene found within 30 days with <50% cloud cover. Try a different date.")
 
     # One item per MGRS tile (least cloudy wins per tile)
     tile_items: dict = {}
@@ -196,7 +200,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     else:
         dl = HLSDownloader(config_path=_CONFIG)
         end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
-        granules = dl.search_scenes(tuple(bbox), f"{post_date}/{end}", max_cloud_cover=20)
+        granules = dl.search_scenes(tuple(bbox), f"{post_date}/{end}", max_cloud_cover=50)
         if not granules:
             raise ValueError("No clear HLS scene found for that area within ~30 days of "
                              "the date. Try another date or location.")
