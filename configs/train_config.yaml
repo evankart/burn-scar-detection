@@ -16,7 +16,7 @@ data:
   num_workers: 4
   cache_dir: ./data/cache
   dnbr_threshold: 0.1
-  pred_threshold: 0.5
+  pred_threshold: 0.65
   fires:
   - name: palisades_fire_2025
     role: test
