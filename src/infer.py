@@ -210,6 +210,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if pred_threshold is None:
         pred_threshold = cfg["data"].get("pred_threshold", 0.5)
 
+    _fmask_raw = None
     if prefetched is not None:
         image = prefetched["image"]
         post_ds = prefetched["post_ds"]
@@ -228,6 +229,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
         image = normalize_bands(post_ds, bands)
         bounds = _bounds_latlon(post_ds)
+        _fmask_raw = dl.load_fmask(granules[0], tuple(bbox))
 
     _, h, w = image.shape
 
@@ -264,11 +266,22 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     from scipy.ndimage import binary_erosion
     pred[~binary_erosion(valid_px, iterations=10)] = 0
 
-    # NDWI water mask
+    # NDWI+MNDWI water mask
     water = water_mask(post_ds, threshold=cfg["data"].get("water_ndwi_threshold", 0.0))
     if pad_h or pad_w:
         water = np.pad(water, ((0, pad_h), (0, pad_w)), constant_values=False)
     pred[water] = 0
+
+    # HLS Fmask: zero out cloud (bit 1) and cloud shadow (bit 3) pixels.
+    if _fmask_raw is not None:
+        fmask = _fmask_raw
+        if fmask.shape != (h, w):
+            from PIL import Image as _PIL
+            fmask = np.array(_PIL.fromarray(fmask).resize((w, h), _PIL.NEAREST))
+        cloud_mask = ((fmask & 0b00001010) != 0)
+        if pad_h or pad_w:
+            cloud_mask = np.pad(cloud_mask, ((0, pad_h), (0, pad_w)), constant_values=False)
+        pred[cloud_mask] = 0
 
     # crop back to the true scene size
     pred = pred[:h, :w]
