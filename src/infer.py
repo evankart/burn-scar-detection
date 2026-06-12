@@ -14,7 +14,7 @@ import torch
 
 from src.data import HLSDownloader, normalize_bands, load_config
 from src.model import BurnScarModel
-from src.utils import get_device, water_mask
+from src.utils import get_device, water_mask, cloud_over_water_mask
 
 logger = logging.getLogger(__name__)
 _CONFIG = "configs/train_config.yaml"
@@ -266,11 +266,13 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     from scipy.ndimage import binary_erosion
     pred[~binary_erosion(valid_px, iterations=10)] = 0
 
-    # NDWI+MNDWI water mask
+    # NDWI+MNDWI water mask + cloud-over-water mask (fallback when Fmask unavailable)
     water = water_mask(post_ds, threshold=cfg["data"].get("water_ndwi_threshold", 0.0))
+    clouds = cloud_over_water_mask(post_ds)
+    combined = water | clouds
     if pad_h or pad_w:
-        water = np.pad(water, ((0, pad_h), (0, pad_w)), constant_values=False)
-    pred[water] = 0
+        combined = np.pad(combined, ((0, pad_h), (0, pad_w)), constant_values=False)
+    pred[combined] = 0
 
     # HLS Fmask: zero out cloud (bit 1) and cloud shadow (bit 3) pixels.
     if _fmask_raw is not None:

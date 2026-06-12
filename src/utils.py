@@ -47,3 +47,26 @@ def water_mask(
         mndwi = (green - swir) / (green + swir + 1e-8)
 
     return (ndwi > threshold) | (mndwi > threshold)
+
+
+def cloud_over_water_mask(
+    ds: xr.Dataset,
+    blue_band: str = "B02",
+    swir_band: str = "B11",
+    green_band: str = "B03",
+    blue_threshold: float = 0.10,
+    mndwi_threshold: float = -0.2,
+) -> np.ndarray:
+    """Boolean mask for cloud/fog pixels over water.
+
+    Combines a blue-brightness test (clouds are bright) with an MNDWI
+    proximity test (MNDWI > -0.2 indicates water or coastal zone).
+    Burn scars and urban land have strongly negative MNDWI (≈ -0.5 to -0.8)
+    so they are not caught even when blue reflectance is elevated.
+    Use as a fallback when HLS Fmask is unavailable.
+    """
+    blue  = ds[blue_band].values.astype(np.float32)
+    green = ds[green_band].values.astype(np.float32)
+    swir  = ds[swir_band].values.astype(np.float32) if swir_band in ds else np.zeros_like(blue)
+    mndwi = (green - swir) / (green + swir + 1e-8)
+    return (blue > blue_threshold) & (mndwi > mndwi_threshold)
