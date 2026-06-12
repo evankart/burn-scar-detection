@@ -32,13 +32,11 @@ def load_model(checkpoint: str = "checkpoints/finetune_v2/best_model.pt",
         logger.info(f"Checkpoint not local — downloading {checkpoint} from {HF_REPO}")
         hf_hub_download(repo_id=HF_REPO, repo_type="dataset", filename=checkpoint, local_dir=".")
     state = torch.load(checkpoint, map_location=device, weights_only=False)
-    prithvi_version = state.get("config", {}).get("model", {}).get("prithvi_version", "1.0")
     model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
-                          in_channels=cfg["model"]["in_channels"],
-                          prithvi_version=prithvi_version)
+                          in_channels=cfg["model"]["in_channels"])
     model.load_state_dict(state["model_state_dict"])
     model = model.to(device).eval()
-    logger.info(f"Loaded {checkpoint} (Prithvi {prithvi_version}) on {device}")
+    logger.info(f"Loaded {checkpoint} on {device}")
     return model, device, cfg
 
 

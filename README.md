@@ -4,19 +4,19 @@ Burn scar segmentation from Harmonized Landsat Sentinel-2 (HLS) satellite imager
 
 **Live demo:** [huggingface.co/spaces/evankart/burn-scar-detection](https://huggingface.co/spaces/evankart/burn-scar-detection)
 
-Trained on **37 wildfires across 5 US states** (CA, OR, AZ, NM, WA), evaluated on 4 held-out fires spanning different biomes and fire types. **Macro IoU 0.605** at a decision threshold of 0.65 (swept on the test fires).
+Trained on **37 wildfires across 5 US states** (CA, OR, AZ, NM, WA), evaluated on 4 held-out fires spanning different biomes and fire types. **Macro IoU 0.626** at a decision threshold of 0.65 (swept on the test fires).
 
 ## Results (held-out test fires, threshold 0.65)
 
 | Fire | Year | Biome / Type | Precision | Recall | IoU |
 |---|---|---|---|---|---|
-| Woolsey | 2018 | SoCal coastal chaparral | 83% | 86% | **74%** |
-| Thomas | 2017 | CA coastal mountains | 94% | 70% | **67%** |
-| Eaton | 2025 | SoCal urban interface | 95% | 69% | **67%** |
-| Palisades | 2025 | SoCal urban interface | 42% | 67% | **35%** |
-| **Macro** | | | | | **60.5%** |
+| Woolsey | 2018 | SoCal coastal chaparral | 85% | 86% | **75%** |
+| Thomas | 2017 | CA coastal mountains | 94% | 71% | **68%** |
+| Eaton | 2025 | SoCal urban interface | 96% | 70% | **67%** |
+| Palisades | 2025 | SoCal urban interface | 50% | 68% | **41%** |
+| **Macro** | | | | | **62.6%** |
 
-The three wildland fires (Woolsey, Thomas, Eaton) score 67–74% IoU. Palisades is substantially harder: the fire burned through dense residential areas (Pacific Palisades, Altadena) where post-fire debris fields have a very different spectral signature from wildland char — a known limitation of single-date spectral models trained on wildland fires.
+The three wildland fires (Woolsey, Thomas, Eaton) score 67–75% IoU. Palisades is substantially harder: the fire burned through dense residential areas (Pacific Palisades, Altadena) where post-fire debris fields have a very different spectral signature from wildland char — a known limitation of single-date spectral models trained on wildland fires.
 
 These four fires are held out of training entirely.
 
