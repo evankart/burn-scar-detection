@@ -59,7 +59,6 @@ def collect_patches(regions: list[dict], downloaded: dict, config: dict) -> list
                 dnbr_threshold=config["data"].get("dnbr_threshold", 0.10),
                 background_keep=config["data"].get("background_keep", 0.3),
                 max_patches=config["data"].get("max_patches_per_region"),
-                prithvi_version=config["model"].get("prithvi_version", "1.0"),
             )
             logger.info(f"  {name}: {len(patches)} patches")
             all_patches.extend(patches)
