@@ -89,21 +89,36 @@ def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> d
 
     catalog = pystac_client.Client.open(_PC_STAC, modifier=planetary_computer.sign_inplace)
     dt_start = datetime.strptime(post_date, "%Y-%m-%d")
+    # Cap end date to 3 days ago — Sentinel-2 processing + PC ingestion takes 1–3 days.
+    max_end = datetime.utcnow() - timedelta(days=3)
 
-    def _search(days: int):
-        end = (dt_start + timedelta(days=days)).strftime("%Y-%m-%d")
+    def _search(days: int, cloud_lt: int = 50):
+        end = min(dt_start + timedelta(days=days), max_end)
+        if end <= dt_start:
+            return []
         return list(catalog.search(
             collections=["sentinel-2-l2a"],
             bbox=bbox,
-            datetime=f"{post_date}/{end}",
-            query={"eo:cloud_cover": {"lt": 50}},
+            datetime=f"{post_date}/{end.strftime('%Y-%m-%d')}",
+            query={"eo:cloud_cover": {"lt": cloud_lt}},
             sortby="+properties.eo:cloud_cover",
             max_items=20,
         ).items())
 
     items = _search(14) or _search(window_days)
     if not items:
-        raise ValueError("No Sentinel-2 scene found within 30 days with <50% cloud cover. Try a different date.")
+        # Check if passes exist at all (no cloud filter) to give a specific error.
+        all_items = _search(window_days, cloud_lt=100)
+        if not all_items:
+            raise ValueError(
+                "No Sentinel-2 passes found over this area in the 30-day window. "
+                "Try a different date or a slightly larger area."
+            )
+        covers = sorted(round(i.properties.get("eo:cloud_cover", 100)) for i in all_items)
+        raise ValueError(
+            f"Sentinel-2 passes found but all have high cloud cover "
+            f"(lowest: {covers[0]}%). Try a date with clearer skies."
+        )
 
     # One item per MGRS tile (least cloudy wins per tile)
     tile_items: dict = {}

@@ -376,25 +376,18 @@ def compute_dnbr(pre_ds: xr.Dataset, post_ds: xr.Dataset) -> np.ndarray:
     return dnbr.astype(np.float32)
 
 
-def normalize_bands(ds: xr.Dataset, bands: list[str],
-                    prithvi_version: str = "1.0") -> np.ndarray:
-    """Stack + normalize HLS bands with Prithvi pretraining stats → (C, H, W).
-    prithvi_version selects stats; a brightness gain is applied for 1.0 only.
-    See README."""
+def normalize_bands(ds: xr.Dataset, bands: list[str]) -> np.ndarray:
+    """Stack + normalize HLS bands with Prithvi 2.0 pretraining stats → (C, H, W)."""
     from src.model import PRITHVI_VERSIONS
 
-    vcfg = PRITHVI_VERSIONS[prithvi_version]
+    vcfg = PRITHVI_VERSIONS["2.0"]
     MEAN = vcfg["mean"]
     STD  = vcfg["std"]
-
-    GAIN_1 = [1.8793, 1.7172, 1.5741, 1.4097, 1.1295, 1.1276]  # 1.0 brightness gain
-    GAIN = GAIN_1 if prithvi_version == "1.0" else [1.0] * len(bands)
 
     arrays = []
     for i, band in enumerate(bands):
         arr = ds[band].values.astype(np.float32)
         arr = np.clip(arr, 0, 1)
-        arr = arr * GAIN[i]
         arr = (arr - MEAN[i]) / STD[i]
         arrays.append(arr)
     return np.stack(arrays, axis=0)
@@ -456,7 +449,6 @@ def process_region(
     dnbr_threshold: float = 0.10,
     background_keep: float = 0.3,
     max_patches: int | None = None,
-    prithvi_version: str = "1.0",
 ) -> list[dict]:
     """Full preprocessing pipeline for a single region."""
     pre_ds = _restore_crs(xr.open_dataset(pre_path, engine="h5netcdf"))
@@ -464,7 +456,7 @@ def process_region(
     post_ds = post_ds.rio.reproject_match(pre_ds)
 
     mask = generate_burn_mask(pre_ds, post_ds, dnbr_threshold=dnbr_threshold)
-    image = normalize_bands(post_ds, bands, prithvi_version=prithvi_version)
+    image = normalize_bands(post_ds, bands)
     patches = create_patches(
         image, mask, patch_size=patch_size,
         background_keep=background_keep, max_patches=max_patches,
