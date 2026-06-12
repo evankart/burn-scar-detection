@@ -74,15 +74,18 @@ _PC_TILES = "https://planetarycomputer.microsoft.com/api/data/v1/item/tiles/WebM
 
 
 def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> dict:
-    """Find the best Sentinel-2 scene and return a cropped RGB PNG clipped to bbox.
+    """Find all S2 tiles covering bbox and return a mosaicked, cropped RGB PNG.
 
-    Uses PC STAC to find the scene (~1s), then titiler.xyz to crop server-side (~2s).
+    Uses PC STAC to find scenes per MGRS tile (~1s), fetches pre-cropped PNGs
+    from titiler.xyz (~2s/tile), composites them into a seamless mosaic.
     Returns {image_b64, scene_date, cloud_cover}.
     """
     import base64
+    import io
     import pystac_client
     import planetary_computer
     import requests as req
+    from PIL import Image as PILImage
 
     catalog = pystac_client.Client.open(_PC_STAC, modifier=planetary_computer.sign_inplace)
     end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
@@ -92,27 +95,50 @@ def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> d
         datetime=f"{post_date}/{end}",
         query={"eo:cloud_cover": {"lt": 20}},
         sortby="+properties.eo:cloud_cover",
-        max_items=5,
+        max_items=20,
     )
     items = list(search.items())
     if not items:
         raise ValueError("No clear Sentinel-2 scene found within ~30 days. Try a different date.")
 
-    item = items[0]
-    scene_date = item.datetime.strftime("%Y-%m-%d")
-    cloud_cover = round(item.properties.get("eo:cloud_cover", 0), 1)
+    # One item per MGRS tile (least cloudy wins per tile)
+    tile_items: dict = {}
+    for item in items:
+        tile = item.properties.get("s2:mgrs_tile") or item.id.split("_T")[-1][:5]
+        if tile not in tile_items:
+            tile_items[tile] = item
+
+    best = min(tile_items.values(), key=lambda i: i.properties.get("eo:cloud_cover", 100))
+    scene_date = best.datetime.strftime("%Y-%m-%d")
+    cloud_cover = round(best.properties.get("eo:cloud_cover", 0), 1)
 
     min_lon, min_lat, max_lon, max_lat = bbox
-    visual_href = item.assets["visual"].href
-    crop_url = (
-        f"https://titiler.xyz/cog/bbox/{min_lon},{min_lat},{max_lon},{max_lat}.png"
-        f"?url={req.utils.quote(visual_href)}&max_size=1024"
-    )
-    r = req.get(crop_url, timeout=30)
-    r.raise_for_status()
+    composite: np.ndarray | None = None
 
+    for item in tile_items.values():
+        visual_href = item.assets["visual"].href
+        crop_url = (
+            f"https://titiler.xyz/cog/bbox/{min_lon},{min_lat},{max_lon},{max_lat}.png"
+            f"?url={req.utils.quote(visual_href)}&max_size=1024&nodata=0"
+        )
+        r = req.get(crop_url, timeout=30)
+        if r.status_code != 200:
+            continue
+        arr = np.array(PILImage.open(io.BytesIO(r.content)).convert("RGBA"))
+        if composite is None:
+            composite = arr.copy()
+        else:
+            # Fill transparent/black holes from this tile
+            empty = (composite[..., :3].sum(axis=-1) == 0) | (composite[..., 3] == 0)
+            composite[empty] = arr[empty]
+
+    if composite is None:
+        raise ValueError("Failed to fetch any scene tiles for this area.")
+
+    buf = io.BytesIO()
+    PILImage.fromarray(composite, mode="RGBA").save(buf, format="PNG")
     return {
-        "image_b64": base64.b64encode(r.content).decode(),
+        "image_b64": base64.b64encode(buf.getvalue()).decode(),
         "scene_date": scene_date,
         "cloud_cover": cloud_cover,
     }
