@@ -16,7 +16,7 @@ import xarray as xr
 
 from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs, load_config
 from src.model import BurnScarModel
-from src.utils import get_device, water_mask, spectral_cloud_mask
+from src.utils import get_device, water_mask
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -153,15 +153,13 @@ def main():
         # Continuous dNBR (same grid as true_mask) for the severity overlay.
         dnbr = compute_dnbr(pre_ds, post_ds)
 
-        # Water mask (NDWI+MNDWI) + spectral cloud mask (fallback when Fmask unavailable).
+        # Water mask (NDWI+MNDWI).
         water = water_mask(post_ds, threshold=config["data"].get("water_ndwi_threshold", 0.0))
-        clouds = spectral_cloud_mask(post_ds)
-        combined = water | clouds
-        if combined.shape == pred_mask.shape:
-            pred_mask[combined] = 0
-            true_mask[combined] = 0
-            dnbr[combined] = np.nan
-            logger.info(f"Masked {int(water.sum())} water + {int(clouds.sum())} cloud pixels")
+        if water.shape == pred_mask.shape:
+            pred_mask[water] = 0
+            true_mask[water] = 0
+            dnbr[water] = np.nan
+            logger.info(f"Masked {int(water.sum())} water pixels (NDWI+MNDWI)")
 
         try:
             from pyproj import Transformer
