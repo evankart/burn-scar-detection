@@ -47,3 +47,19 @@ def water_mask(
         mndwi = (green - swir) / (green + swir + 1e-8)
 
     return (ndwi > threshold) | (mndwi > threshold)
+
+
+def spectral_cloud_mask(
+    ds: xr.Dataset,
+    blue_threshold: float = 0.10,
+    blue_band: str = "B02",
+) -> np.ndarray:
+    """Boolean cloud mask based on blue-band brightness.
+
+    Clouds and fog have high blue (B02) reflectance (~0.15–0.40) while
+    most land surfaces stay below 0.10. Used as a fallback when HLS Fmask
+    is unavailable (e.g. cached scenes). Only masks pixels above threshold,
+    so bright sandy/urban land is left untouched unless it reads cloud-bright.
+    """
+    blue = ds[blue_band].values.astype(np.float32)
+    return blue > blue_threshold
