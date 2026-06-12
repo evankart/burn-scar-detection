@@ -45,7 +45,7 @@ HLS (6 bands, 30m) → z-score normalize → Prithvi-EO-2.0 ViT encoder → FPN 
 
 **Patch sampling.** Burn scars are rare, so a `background_keep` fraction caps pure-background patches. A patch is kept if ≥ half its pixels are valid; remaining nodata is imputed to 0. (An earlier "every pixel must be valid" rule silently dropped whole large-fire scenes whose every window clipped a nodata gap.)
 
-**Water masking (inference).** Open water is not burnable but both the model and the dNBR label flag it. A combined NDWI + MNDWI mask is applied after inference: `NDWI = (green − NIR)/(green + NIR)` catches inland water; `MNDWI = (green − SWIR1)/(green + SWIR1)` catches open ocean and coastal water where haze depresses NIR. A pixel is masked if either index exceeds 0. Both are deterministic and model-independent.
+**Water and cloud masking (inference).** Two post-inference masks are applied. (1) Combined NDWI + MNDWI water mask: `NDWI = (green − NIR)/(green + NIR)` for inland water; `MNDWI = (green − SWIR1)/(green + SWIR1)` for open ocean/coastal water masked by haze. A pixel is masked if either exceeds 0. (2) HLS Fmask cloud mask: bit 1 (cloud) and bit 3 (cloud shadow) of the Fmask quality band shipped with every HLS granule. The Fmask-derived cloud mask specifically addresses false positives over cloud-covered ocean, which NDWI/MNDWI does not catch. Both masks are deterministic and model-independent.
 
 **Sliding-window inference.** Scenes are tiled into overlapping 224-px windows (half-patch stride), with a final row/col anchored flush to the edge; overlaps are averaged and a thin border by imputed nodata is trimmed.
 

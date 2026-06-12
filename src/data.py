@@ -132,6 +132,26 @@ class HLSDownloader:
         ds.load()
         return ds
 
+    def load_fmask(self, granule, bbox: tuple) -> np.ndarray | None:
+        """Load HLS Fmask quality band for a granule, clipped to bbox.
+
+        Returns uint8 array of Fmask values, or None if the band is unavailable.
+        Bit flags: 1=cirrus, 2=cloud, 8=cloud shadow, 16=snow, 32=water.
+        """
+        try:
+            files = earthaccess.open([granule])
+            matched = [f for f in files if f.path.endswith(".Fmask.tif")]
+            if not matched:
+                return None
+            da = rioxarray.open_rasterio(matched[0], mask_and_scale=False)
+            da = da.rio.clip([mapping(box(*bbox))], crs="EPSG:4326")
+            da = da.squeeze("band", drop=True)
+            da.load()
+            return da.values.astype(np.uint8)
+        except Exception as e:
+            logger.warning(f"Could not load Fmask: {e}")
+            return None
+
     def _make_target_grid(self, bbox: tuple, resolution: float = 30.0) -> xr.DataArray:
         """
         Build a reference DataArray covering the full bbox in the local UTM zone.
