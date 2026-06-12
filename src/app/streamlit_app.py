@@ -311,7 +311,7 @@ def custom_detection_view():
     st.caption(
         f"Scene acquired **{preview['scene_date']}** · {cc}% cloud cover · AOI ≈ {area:,.0f} km²"
     )
-    if isinstance(cc, (int, float)) and cc > 30:
+    if isinstance(cc, (int, float)) and cc > 20:
         st.warning(f"Cloud cover is {cc}% — image may be partially obscured. Try a different date.")
 
     col1, col2 = st.columns([1, 3])
