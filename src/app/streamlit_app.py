@@ -454,7 +454,7 @@ def main():
     )
     st.title("Wildfire Burn Scar Detection")
     st.caption(
-        "Prithvi-EO-1.0-100M geospatial foundation model (IBM × NASA) "
+        "Prithvi-EO-2.0-300M geospatial foundation model (IBM × NASA) "
         "fine-tuned on 37 wildfires across 5 US states, evaluated on 4 held-out California fires."
     )
 
@@ -555,7 +555,7 @@ def main():
             )
 
         st.divider()
-        st.caption("Encoder: Prithvi-EO-1.0-100M · 100M params · pretrained on 640k HLS scenes")
+        st.caption("Encoder: Prithvi-EO-2.0-300M · 300M params · pretrained on 640k HLS scenes")
 
     # --- Map ---
     with st.spinner("Loading satellite imagery..."):
@@ -608,15 +608,15 @@ def main():
 
         #### Model
 
-        **[Prithvi-EO-1.0-100M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-1.0-100M)**
-        is a Vision Transformer pretrained by IBM and NASA on 640,000 Harmonized Landsat Sentinel-2
+        **[Prithvi-EO-2.0-300M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M)**
+        is a ViT-Large pretrained by IBM and NASA on 640,000 Harmonized Landsat Sentinel-2
         (HLS) scenes — a globally representative dataset spanning all seasons and land cover types.
         The encoder learns rich spectral-spatial representations of Earth's surface.
 
         For burn scar detection, the Prithvi encoder is paired with an FPN (Feature Pyramid
         Network) decoder. Each 224×224 image patch is:
-        1. Passed through the 12-layer ViT encoder
-        2. Features extracted from layers 3, 5, 8, and 12 (evenly spaced to capture both
+        1. Passed through the 24-layer ViT-Large encoder
+        2. Features extracted from layers 6, 12, 18, and 24 (evenly spaced to capture both
            fine spectral detail and high-level semantic patterns)
         3. Fused via top-down lateral connections (FPN) into a single 14×14 feature map
         4. Upsampled by the decoder (4× transposed-conv stages) → per-pixel burn probability
