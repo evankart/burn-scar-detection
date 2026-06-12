@@ -1,4 +1,3 @@
-import json
 import math
 import sys
 from datetime import date
@@ -39,19 +38,33 @@ REGIONS = {
         "date": "November 2018",
         "setting": "Southern California chaparral",
     },
-    "east_troublesome_2020": {
-        "display_name": "East Troublesome Fire (2020)",
-        "name": "east_troublesome_2020",
-        "center": [40.25, -105.85],
-        "zoom": 10,
+    "palisades_fire_2025": {
+        "display_name": "Palisades Fire (2025)",
+        "name": "palisades_fire_2025",
+        "center": [34.05, -118.55],
+        "zoom": 12,
         "description": (
-            "Burned 193,812 acres in Grand County, Colorado — among the largest fires "
-            "in state history. Grew explosively in October 2020, forcing evacuations "
-            "near Grand Lake and Rocky Mountain National Park."
+            "Burned ~23,400 acres across Pacific Palisades and Malibu, destroying "
+            "thousands of structures in one of the most destructive fires in Los Angeles "
+            "history. January 2025."
         ),
-        "acres": "193,812",
-        "date": "October 2020",
-        "setting": "Colorado subalpine forest",
+        "acres": "23,400",
+        "date": "January 2025",
+        "setting": "Southern California coastal sage scrub & WUI",
+    },
+    "eaton_fire_2025": {
+        "display_name": "Eaton Fire (2025)",
+        "name": "eaton_fire_2025",
+        "center": [34.19, -118.07],
+        "zoom": 12,
+        "description": (
+            "Burned ~14,100 acres in Altadena and the Pasadena foothills, causing "
+            "widespread destruction in a densely populated urban-wildland interface. "
+            "January 2025."
+        ),
+        "acres": "14,100",
+        "date": "January 2025",
+        "setting": "Southern California foothill chaparral & WUI",
     },
     "thomas_fire_2017": {
         "display_name": "Thomas Fire (2017)",
@@ -134,15 +147,6 @@ def create_map(region: dict, pred_data: dict | None, overlay_opacity: float) -> 
         name="Satellite",
     ).add_to(m)
 
-    perimeter_path = Path(f"data/perimeters/{region['name']}.geojson")
-    if perimeter_path.exists():
-        folium.GeoJson(
-            json.loads(perimeter_path.read_text()),
-            name="CAL FIRE Perimeter",
-            style_function=lambda _: {"color": "#ff6600", "weight": 2.5, "fillOpacity": 0},
-            tooltip="Official CAL FIRE perimeter",
-        ).add_to(m)
-
     if pred_data is not None:
         create_sentinel_overlay(pred_data["image"], pred_data["bounds"]).add_to(m)
         if pred_data.get("dnbr") is not None:
@@ -165,6 +169,13 @@ def _load_model():
 
 
 @st.cache_data(show_spinner=False)
+def _fetch_scene_cached(bbox: tuple, post_date: str) -> dict:
+    """Find the best Sentinel-2 scene and return a tile URL — no data download."""
+    from src.infer import fetch_preview_tiles
+    return fetch_preview_tiles(bbox, post_date)
+
+
+@st.cache_data(show_spinner=False)
 def run_detection(bbox: tuple, post_date: str) -> dict:
     """Cached so re-running the same AOI/date is instant."""
     from src.infer import detect_burn_scar
@@ -183,36 +194,88 @@ def _aoi_area_km2(bbox: tuple) -> float:
 def custom_detection_view():
     st.subheader("Detect burn scars on a custom area")
     st.markdown(
-        "**1.** Search or zoom to a location · **2.** Draw a polygon or rectangle with the "
-        "tools on the left edge of the map · **3.** Pick a post-fire date · **4.** Run detection.  \n"
+        "**1.** Search or zoom to a location · **2.** Draw a rectangle on the map · "
+        "**3.** Pick a post-fire date · **4.** Preview the satellite scene · **5.** Run detection.  \n"
         "_The model runs on a single post-fire HLS scene — no before/after comparison._"
     )
     post_date = st.date_input(
         "Post-fire date",
-        value=date(2020, 9, 15), min_value=date(2015, 7, 1), max_value=date.today(),
-        help="The app finds the least-cloudy HLS scene within ~30 days after this date.",
+        value=date.today(), min_value=date(2015, 7, 1), max_value=date.today(),
+        format="YYYY-MM-DD",
+        help="The app finds the least-cloudy Sentinel-2 scene within ~30 days after this date.",
     )
 
-    draw_map = folium.Map(location=[39.0, -120.5], zoom_start=6, tiles=None, control_scale=True)
+    # --- Base map (never reloads — preview/detection layers injected dynamically) ---
+    preview = st.session_state.get("scene_preview")
+    bbox = st.session_state.get("aoi_bbox")
+
+    m = folium.Map(location=[39.0, -120.5], zoom_start=6, tiles=None, control_scale=True)
     folium.TileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         attr="Esri", name="Satellite",
-    ).add_to(draw_map)
-    Geocoder(collapsed=False, add_marker=False).add_to(draw_map)
+    ).add_to(m)
+    Geocoder(collapsed=False, add_marker=False).add_to(m)
     Draw(
         draw_options={"polyline": False, "circle": False, "marker": False,
                       "circlemarker": False, "polygon": True, "rectangle": True},
         edit_options={"edit": False, "remove": True},
-    ).add_to(draw_map)
-    out = st_folium(draw_map, key="draw_map", use_container_width=True, height=480,
-                    returned_objects=["last_active_drawing"])
+    ).add_to(m)
 
-    # Capture the drawn polygon -> bbox; persist so it survives the button rerun.
+    # Build feature group to inject without reloading the map
+    detection_early = st.session_state.get("detection_result")
+    fg = folium.FeatureGroup(name="overlay")
+    map_center = None
+    map_zoom = None
+    import math
+
+    active_bounds = None
+    if detection_early and bbox:
+        active_bounds = detection_early["bounds"]
+    elif preview and bbox:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        active_bounds = [[min_lat, min_lon], [max_lat, max_lon]]
+
+    if active_bounds:
+        s, w = active_bounds[0]; n, e = active_bounds[1]
+        map_center = ((s + n) / 2, (w + e) / 2)
+        span = max(n - s, e - w)
+        map_zoom = max(1, min(14, int(math.log2(360 / span)) - 1))
+
+    if detection_early:
+        create_sentinel_overlay(detection_early["image"], detection_early["bounds"]).add_to(fg)
+        create_folium_overlay(detection_early["pred_mask"], detection_early["bounds"], opacity=0.6).add_to(fg)
+    elif preview and bbox:
+        min_lon, min_lat, max_lon, max_lat = bbox
+        folium.raster_layers.ImageOverlay(
+            image=f"data:image/png;base64,{preview['image_b64']}",
+            bounds=[[min_lat, min_lon], [max_lat, max_lon]],
+            opacity=1.0,
+        ).add_to(fg)
+        folium.Rectangle(
+            bounds=[[min_lat, min_lon], [max_lat, max_lon]],
+            color="#3388ff", weight=2, fill=False,
+        ).add_to(fg)
+
+    out = st_folium(
+        m, key="draw_map",
+        feature_group_to_add=fg,
+        center=map_center,
+        zoom=map_zoom,
+        use_container_width=True, height=500,
+        returned_objects=["last_active_drawing"],
+    )
+
+    # Capture drawn shape → bbox; clear preview if AOI/date changed.
     draw = (out or {}).get("last_active_drawing")
     if draw and draw.get("geometry", {}).get("type") == "Polygon":
         ring = draw["geometry"]["coordinates"][0]
         lons = [p[0] for p in ring]; lats = [p[1] for p in ring]
-        st.session_state["aoi_bbox"] = (min(lons), min(lats), max(lons), max(lats))
+        new_bbox = (min(lons), min(lats), max(lons), max(lats))
+        if new_bbox != st.session_state.get("aoi_bbox"):
+            st.session_state["aoi_bbox"] = new_bbox
+            st.session_state.pop("scene_preview", None)
+            st.session_state.pop("detection_result", None)
+            preview = None
 
     bbox = st.session_state.get("aoi_bbox")
     if not bbox:
@@ -220,34 +283,67 @@ def custom_detection_view():
         return
 
     area = _aoi_area_km2(bbox)
-    st.caption(f"AOI ≈ {area:,.0f} km²  ·  bbox {tuple(round(b, 3) for b in bbox)}")
+    rounded = (tuple(round(b, 4) for b in bbox), post_date.isoformat())
+    preview = st.session_state.get("scene_preview")
+
+    # Invalidate preview if bbox or date changed.
+    if preview and preview.get("_key") != rounded:
+        preview = None
+        st.session_state.pop("scene_preview", None)
+        st.session_state.pop("detection_result", None)
+
     if area > 10000:
-        st.warning("Large area — the download and inference will be slow. A smaller AOI "
+        st.warning("Large area — download and inference will be slow. A smaller AOI "
                    "(under ~10,000 km²) is recommended.")
 
-    if not st.button("🔥 Detect burn scars", type="primary"):
-        return
-    try:
-        with st.spinner("Finding and downloading the HLS scene, then running the model (~1–3 min)…"):
-            res = run_detection(tuple(round(b, 4) for b in bbox), post_date.isoformat())
-    except Exception as e:
-        st.error(f"Could not run detection: {e}")
+    # --- Stage 1: Preview scene ---
+    if preview is None:
+        st.caption(f"AOI ≈ {area:,.0f} km²")
+        if st.button("🛰 Preview satellite scene", type="secondary"):
+            try:
+                with st.spinner("Finding best Sentinel-2 scene…"):
+                    p = _fetch_scene_cached(*rounded)
+                    p["_key"] = rounded
+                    st.session_state["scene_preview"] = p
+                    st.session_state.pop("detection_result", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not find a scene: {e}")
         return
 
-    st.success(f"Detected burn scar over ~{res['burned_frac'] * 100:.1f}% of the area.")
-    st.caption(f"Imagery: least-cloudy HLS acquired **{res['scene_date']}** "
-               f"(searched ≤30 days after your date; composited from {res['n_scenes']} scene(s)).")
-    s, w = res["bounds"][0]; n, e = res["bounds"][1]
-    rm = folium.Map(location=[(s + n) / 2, (w + e) / 2], zoom_start=10, tiles=None)
-    rm.fit_bounds(res["bounds"])
-    folium.TileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Esri", name="Satellite",
-    ).add_to(rm)
-    create_sentinel_overlay(res["image"], res["bounds"]).add_to(rm)
-    create_folium_overlay(res["pred_mask"], res["bounds"], opacity=0.6).add_to(rm)
-    folium.LayerControl(collapsed=False).add_to(rm)
-    st_folium(rm, key="result_map", use_container_width=True, height=560, returned_objects=[])
+    cc = preview.get("cloud_cover", "?")
+    st.caption(
+        f"Scene acquired **{preview['scene_date']}** · {cc}% cloud cover · AOI ≈ {area:,.0f} km²"
+    )
+    if isinstance(cc, (int, float)) and cc > 30:
+        st.warning(f"Cloud cover is {cc}% — image may be partially obscured. Try a different date.")
+
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("← Change area / date"):
+            st.session_state.pop("scene_preview", None)
+            st.session_state.pop("detection_result", None)
+            st.rerun()
+
+    # --- Stage 2: Run detection ---
+    detection = st.session_state.get("detection_result")
+
+    if detection is None:
+        with col2:
+            if st.button("🔥 Run burn scar detection", type="primary"):
+                try:
+                    with st.spinner("Running the model (~1–2 min)…"):
+                        res = run_detection(*rounded)
+                        st.session_state["detection_result"] = res
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Detection failed: {e}")
+        return
+
+    st.success(
+        f"Detected burn scar over ~{detection['burned_frac'] * 100:.1f}% of the area. "
+        f"HLS acquired **{detection['scene_date']}** · {detection['n_scenes']} granule(s)."
+    )
 
 
 def main():
@@ -258,7 +354,7 @@ def main():
     st.title("Wildfire Burn Scar Detection")
     st.caption(
         "Prithvi-EO-1.0-100M geospatial foundation model (IBM × NASA) "
-        "fine-tuned on 37 wildfires across 5 US states, evaluated on 3 held-out fires."
+        "fine-tuned on 37 wildfires across 5 US states, evaluated on 4 held-out California fires."
     )
 
     overlay_opacity = 0.6
@@ -433,9 +529,9 @@ def main():
         Trained on 37 wildfires across 5 US states (CA, OR, AZ, NM, WA):
         {", ".join(TRAIN_FIRES)}.
 
-        Three fires are held out entirely for evaluation: Woolsey (2018, CA chaparral),
-        East Troublesome (2020, CO subalpine), and Thomas (2017, CA coast). No held-out
-        patches appear during training or validation.
+        Four California fires are held out entirely for evaluation: Palisades (2025, LA coastal WUI),
+        Eaton (2025, Pasadena foothill WUI), Woolsey (2018, SoCal chaparral), and Thomas (2017, CA coast).
+        No held-out patches appear during training or validation.
 
         Full scenes are sliced into 224×224 px patches (75% overlap). Patches with at least 1%
         burned pixels are always kept; background-only patches are sampled at 60% to reduce class

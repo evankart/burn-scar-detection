@@ -18,6 +18,21 @@ data:
   dnbr_threshold: 0.1
   pred_threshold: 0.5
   fires:
+  - name: palisades_fire_2025
+    role: test
+    lat: 34.05
+    lon: -118.55
+    buffer_km: 18
+    pre_fire_date: '2024-10-01'
+    post_fire_date: '2025-02-15'
+  - name: eaton_fire_2025
+    role: test
+    lat: 34.19
+    lon: -118.07
+    buffer_km: 15
+    pre_fire_date: '2024-10-01'
+    post_fire_date: '2025-03-01'
+    allow_multitile: true
   - name: woolsey_fire_2018
     role: test
     lat: 34.16
@@ -25,13 +40,6 @@ data:
     buffer_km: 20
     pre_fire_date: '2018-10-01'
     post_fire_date: '2018-11-20'
-  - name: east_troublesome_2020
-    role: test
-    lat: 40.15
-    lon: -105.85
-    buffer_km: 30
-    pre_fire_date: '2020-08-01'
-    post_fire_date: '2020-11-15'
   - name: thomas_fire_2017
     role: test
     lat: 34.5

@@ -133,6 +133,7 @@ def create_sentinel_overlay(
     image: np.ndarray,
     bounds: list[list[float]],
     max_size: int = 1024,
+    rgb_indices: tuple[int, int, int] = (2, 1, 0),
 ):
     """
     Create a Folium ImageOverlay showing HLS RGB imagery.
@@ -141,12 +142,12 @@ def create_sentinel_overlay(
         image: (C, H, W) HLS bands (may be Prithvi z-score normalized)
         bounds: [[south, west], [north, east]] lat/lon bounds
         max_size: downsample so the longer dimension is at most this many pixels
+        rgb_indices: which band indices to use for R, G, B (default: B04, B03, B02)
     """
     import folium
 
-    # Bands are stored in order B02, B03, B04 … — use indices 2,1,0 for RGB.
-    # Use percentile stretch so z-score normalized values display correctly.
-    rgb = np.stack([image[2], image[1], image[0]], axis=-1).astype(np.float32)
+    r, g, b = rgb_indices
+    rgb = np.stack([image[r], image[g], image[b]], axis=-1).astype(np.float32)
     rgb = _percentile_stretch(rgb)
     rgb = np.nan_to_num(rgb, nan=0.0)
     rgb_uint8 = (rgb * 255).astype(np.uint8)
