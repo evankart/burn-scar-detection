@@ -284,9 +284,10 @@ def custom_detection_view():
     # Increment a counter each time zoom is needed so the map key changes,
     # forcing a fresh component render that picks up m.fit_bounds().
     zoom_count = st.session_state.get("aoi_zoom_count", 0)
-    if zoom_pending and bbox:
+    if bbox and (preview or detection_early):
         min_lon, min_lat, max_lon, max_lat = bbox
         m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=[20, 20])
+    if zoom_pending and bbox:
         zoom_count += 1
         st.session_state["aoi_zoom_count"] = zoom_count
 
