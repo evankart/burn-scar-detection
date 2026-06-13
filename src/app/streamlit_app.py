@@ -430,6 +430,22 @@ def custom_detection_view():
     if isinstance(cc, (int, float)) and cc > 20:
         st.warning(f"Cloud cover is {cc}% — image may be partially obscured.")
 
+    # Multi-tile transparency: the AOI may straddle several Sentinel-2 MGRS tiles,
+    # which are mosaicked together (not dropped). Warn — and flag date mismatches.
+    tiles = preview.get("tiles", [])
+    if len(tiles) > 1:
+        uniq_dates = sorted(set(preview.get("tile_dates", {}).values()))
+        date_note = (
+            f" Tiles were acquired on different dates ({', '.join(uniq_dates)}), "
+            "so the mosaic may show seams across tile boundaries."
+            if len(uniq_dates) > 1 else ""
+        )
+        st.warning(
+            f"Your AOI spans {len(tiles)} Sentinel-2 tiles ({', '.join(tiles)}). "
+            f"Scenes from all tiles are mosaicked into one image and detection runs "
+            f"on the full mosaic.{date_note}"
+        )
+
     col1, col2 = st.columns([1, 3])
     with col1:
         if st.button("← Change area / date"):

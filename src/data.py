@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 
 HLS_COLLECTION = "HLSS30.v2.0"
 
+# HLS Fmask QA bit values to treat as nodata: cloud (2) | cloud shadow (8) |
+# snow/ice (16) = 26. Masked per-granule before mosaicking so clean pixels from
+# other scenes fill the gaps. Cirrus (1) and adjacent-to-cloud (4) are left in.
+FMASK_BAD_BITS = 0b00011010
+
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Recursively merge overlay into base (overlay wins); returns a new dict."""
@@ -152,6 +157,26 @@ class HLSDownloader:
             logger.warning(f"Could not load Fmask: {e}")
             return None
 
+    def _load_fmask_da(self, granule, bbox: tuple, ref_da: xr.DataArray) -> xr.DataArray | None:
+        """Fmask QA band as a DataArray reprojected onto ref_da's grid (nearest),
+        so it aligns pixel-for-pixel with the loaded spectral bands. None if absent."""
+        from rasterio.enums import Resampling
+        try:
+            files = earthaccess.open([granule])
+            matched = [f for f in files if f.path.endswith(".Fmask.tif")]
+            if not matched:
+                return None
+            da = rioxarray.open_rasterio(matched[0], mask_and_scale=False)
+            da = da.rio.clip([mapping(box(*bbox))], crs="EPSG:4326")
+            da = da.squeeze("band", drop=True)
+            if da.shape != ref_da.shape:
+                da = da.rio.reproject_match(ref_da, resampling=Resampling.nearest)
+            da.load()
+            return da
+        except Exception as e:
+            logger.warning(f"Could not load Fmask for masking: {e}")
+            return None
+
     def _make_target_grid(self, bbox: tuple, resolution: float = 30.0) -> xr.DataArray:
         """
         Build a reference DataArray covering the full bbox in the local UTM zone.
@@ -181,10 +206,15 @@ class HLSDownloader:
         )
         return ref.rio.write_crs(utm_epsg)
 
-    def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10) -> xr.Dataset:
+    def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10,
+                              apply_fmask: bool = True) -> xr.Dataset:
         """Mosaic up to max_scenes onto a fixed UTM grid spanning the bbox via
         rioxarray.merge (each scene placed at its true position; least-cloudy
-        first, nodata gaps filled from later scenes)."""
+        first, nodata gaps filled from later scenes).
+
+        With apply_fmask=True, each granule's cloud / cloud-shadow / snow pixels
+        (per its HLS Fmask QA band, FMASK_BAD_BITS) are set to NaN before merge,
+        so clean pixels from other scenes fill those gaps in the mosaic."""
         import gc
         from rioxarray.merge import merge_arrays
 
@@ -194,6 +224,7 @@ class HLSDownloader:
 
         per_band: dict[str, list] = {b: [] for b in self.bands}
         loaded = 0
+        masked_px_total = 0
         last_err = None
         for granule in granules[:max_scenes]:
             granule_id = granule.get("meta", {}).get("native-id", "unknown")
@@ -203,6 +234,14 @@ class HLSDownloader:
                 last_err = e
                 logger.warning(f"Skipping scene {granule_id}: {type(e).__name__}: {e}")
                 continue
+            if apply_fmask:
+                fmask_da = self._load_fmask_da(granule, bbox, ds[self.bands[0]])
+                if fmask_da is not None:
+                    bad = (fmask_da.values.astype(np.uint8) & FMASK_BAD_BITS) != 0
+                    if bad.any():
+                        masked_px_total += int(bad.sum())
+                        for band in self.bands:
+                            ds[band].values[bad] = np.nan
             for band in self.bands:
                 da = ds[band].rio.write_nodata(np.nan)
                 if da.rio.crs is not None and da.rio.crs != target_crs:
@@ -228,7 +267,8 @@ class HLSDownloader:
             for k in ("_FillValue", "scale_factor", "add_offset"):
                 out[band].attrs.pop(k, None)
         valid_pct = (~np.isnan(out[self.bands[0]].values)).mean() * 100
-        logger.info(f"Merged {loaded} scene(s) across tiles: {valid_pct:.1f}% valid pixels")
+        fmask_note = f", Fmask-masked {masked_px_total:,} px pre-merge" if masked_px_total else ""
+        logger.info(f"Merged {loaded} scene(s) across tiles: {valid_pct:.1f}% valid pixels{fmask_note}")
         return out
 
     def _filter_to_tile(self, granules: list, tile_id: str) -> list:

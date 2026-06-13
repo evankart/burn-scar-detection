@@ -48,6 +48,25 @@ python scripts/eval_sweep.py --threshold 0.5 \
 ```
 (The eval runs locally because the baseline checkpoint isn't in git.)
 
+## Hyperparameter search (Optuna) — run before the final retrain
+Same instance/AMI as the fine-tune. Searches LR, backbone-LR multiplier, Tversky
+alpha, and burn-class weight over ~10 trials, maximizing val burn-class IoU on
+the held-out *training* fires (carr + holy); test fires are never touched.
+```bash
+# on the instance, after cloning:
+export EARTHDATA_USER=... EARTHDATA_PASS=... S3_BUCKET=s3://burn-scar-detection
+SELF_TERMINATE=1 bash cloud/run_optuna.sh        # N_TRIALS=10 EPOCHS=8 by default
+```
+This uploads `checkpoints/optuna/` (study.pkl, best_params.yaml, plots) and
+`configs/finetune_optuna_config.yaml` to S3. Then run the **final retrain** with the
+tuned config:
+```bash
+EXP=finetune_v3 CONFIG=configs/finetune_optuna_config.yaml \
+  SELF_TERMINATE=1 bash cloud/run_job.sh
+```
+Pull `checkpoints/finetune_v3/` back, run `run_inference.py` for the four test
+fires, and update the README results table.
+
 ## Cost / safety
 - g5.xlarge on-demand ≈ $1.01/hr; a full fine-tune ≈ $1–2, covered by Free-tier credits.
 - The instance self-terminates → no idle charges. Budget alarm set at $10 as a backstop.
@@ -71,7 +90,7 @@ Hosts both app tabs: precomputed held-out results, and live custom-area detectio
 huggingface-cli upload evankart/burn-scar-detection-data \
   checkpoints/balanced_chaparral/best_model.pt \
   checkpoints/balanced_chaparral/best_model.pt --repo-type dataset
-for f in woolsey_fire_2018 east_troublesome_2020 thomas_fire_2017; do
+for f in woolsey_fire_2018 thomas_fire_2017 palisades_fire_2025 eaton_fire_2025; do
   huggingface-cli upload evankart/burn-scar-detection-data \
     data/predictions/$f.npz predictions/$f.npz --repo-type dataset
 done
