@@ -79,7 +79,7 @@ def run_inference(
 
     # Trim a thin border of the valid region (predictions abutting nodata are unreliable).
     from scipy.ndimage import binary_erosion
-    trim = ~binary_erosion(valid_px, iterations=10)
+    trim = ~binary_erosion(valid_px, iterations=2)
     pred_binary[trim] = 0
 
     if return_prob:
