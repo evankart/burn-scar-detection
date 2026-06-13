@@ -183,6 +183,7 @@ class Trainer:
             "loss": total_loss / len(self.dataloaders["train"]),
             "pixel_accuracy": (tp + tn) / total if total > 0 else 0.0,
             "mean_iou": float(np.nanmean([iou_burn, iou_bg])),
+            "iou_burn_scar": float(iou_burn),
             "f1_burn_scar": f1,
         }
         return metrics
@@ -216,6 +217,7 @@ class Trainer:
             "loss": total_loss / len(self.dataloaders["val"]),
             "pixel_accuracy": (tp + tn) / total if total > 0 else 0.0,
             "mean_iou": float(np.nanmean([iou_burn, iou_bg])),
+            "iou_burn_scar": float(iou_burn),
             "f1_burn_scar": f1,
         }
 
