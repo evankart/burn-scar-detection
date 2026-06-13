@@ -162,6 +162,10 @@ def fetch_preview_tiles(bbox: tuple, post_date: str, window_days: int = 30) -> d
         "image_b64": base64.b64encode(buf.getvalue()).decode(),
         "scene_date": scene_date,
         "cloud_cover": cloud_cover,
+        # MGRS tiles composited into this mosaic, and each tile's acquisition date.
+        # Lets the app warn when an AOI spans tiles (possibly from different dates).
+        "tiles": sorted(tile_items.keys()),
+        "tile_dates": {t: it.datetime.strftime("%Y-%m-%d") for t, it in tile_items.items()},
     }
 
 
