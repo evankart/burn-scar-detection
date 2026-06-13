@@ -398,11 +398,10 @@ def compute_dnbr(pre_ds: xr.Dataset, post_ds: xr.Dataset) -> np.ndarray:
 
 def normalize_bands(ds: xr.Dataset, bands: list[str]) -> np.ndarray:
     """Stack + normalize HLS bands with Prithvi 2.0 pretraining stats → (C, H, W)."""
-    from src.model import PRITHVI_VERSIONS
+    from src.model import PRITHVI_CFG
 
-    vcfg = PRITHVI_VERSIONS["2.0"]
-    MEAN = vcfg["mean"]
-    STD  = vcfg["std"]
+    MEAN = PRITHVI_CFG["mean"]
+    STD  = PRITHVI_CFG["std"]
 
     arrays = []
     for i, band in enumerate(bands):
