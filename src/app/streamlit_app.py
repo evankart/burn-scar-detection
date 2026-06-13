@@ -224,23 +224,34 @@ def _aoi_area_km2(bbox: tuple) -> float:
 
 
 def custom_detection_view():
-    st.subheader("Detect burn scars on a custom area")
-    st.markdown(
-        "**1.** Draw a rectangle on the map · **2.** Pick a scene from available dates · "
-        "**3.** Preview the satellite image · **4.** Run detection.  \n"
-        "_The model runs on a single post-fire HLS scene — no before/after comparison._"
-    )
-    post_date = st.date_input(
-        "Search window end",
-        value=date.today(), min_value=date(2015, 7, 1), max_value=date.today(),
-        format="YYYY-MM-DD",
-        help="Available Sentinel-2 scenes from the 60 days before this date will be listed below.",
-    )
-    days_ago = (date.today() - post_date).days
+    today = date.today()
+    months = ["January","February","March","April","May","June",
+              "July","August","September","October","November","December"]
+    col_m, col_d, col_y = st.columns(3)
+    with col_m:
+        month = st.selectbox("Month", months, index=today.month - 1, label_visibility="collapsed",
+                             placeholder="Month", key="date_month")
+    with col_d:
+        day = st.selectbox("Day", list(range(1, 32)), index=today.day - 1, label_visibility="collapsed",
+                           placeholder="Day", key="date_day")
+    with col_y:
+        years = list(range(2015, today.year + 1))
+        year = st.selectbox("Year", years, index=len(years) - 1, label_visibility="collapsed",
+                            placeholder="Year", key="date_year")
+    import calendar
+    max_day = calendar.monthrange(year, months.index(month) + 1)[1]
+    day = min(day, max_day)
+    try:
+        post_date = date(year, months.index(month) + 1, day)
+    except ValueError:
+        post_date = today
+    st.caption(f"Search window end: {post_date.isoformat()}")
+
+    days_ago = (today - post_date).days
     if days_ago < 3:
         st.warning(
             f"Date is {days_ago} day{'s' if days_ago != 1 else ''} ago — "
-            "Sentinel-2 data takes 1–3 days to process and reach the archive. "
+            "HLS data takes 1–3 days to process and reach the archive. "
             "Try an earlier date."
         )
 
@@ -315,7 +326,7 @@ def custom_detection_view():
     out = st_folium(
         m, key=f"draw_map_{zoom_count}",
         feature_group_to_add=fg,
-        use_container_width=True, height=500,
+        use_container_width=True, height=460,
         returned_objects=["last_active_drawing"],
     )
 
@@ -449,140 +460,119 @@ def custom_detection_view():
 
 def main():
     st.markdown(
-        "<style>[data-testid='stMetricValue'] { font-size: 1.6rem; }</style>",
+        """
+        <style>
+        header[data-testid="stHeader"] { display: none; }
+        footer { display: none; }
+        .block-container {
+            padding-top: 0.4rem !important;
+            padding-bottom: 0 !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        .stVerticalBlock { gap: 0.4rem !important; }
+        [data-testid='stMetricValue'] { font-size: 1.6rem; }
+        </style>
+        """,
         unsafe_allow_html=True,
-    )
-    st.title("Wildfire Burn Scar Detection")
-    st.caption(
-        "Prithvi-EO-2.0-300M geospatial foundation model (IBM × NASA) "
-        "fine-tuned on 37 wildfires across 5 US states, evaluated on 4 held-out California fires."
     )
 
     overlay_opacity = 0.6
 
+    # ── Sidebar: app description + metrics (filled after fire selection) ──────
     with st.sidebar:
+        st.markdown(
+            "<h3 style='margin:0 0 6px 0'>Wildfire Burn Scar Detection</h3>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Fine-tuned [Prithvi-EO-2.0-300M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M) "
+            "(IBM × NASA ViT-Large, 300M params) on 37 wildfires across 5 US states. "
+            "Evaluated on 4 held-out California fires never seen during training."
+        )
+    metrics_placeholder = st.sidebar.empty()
+
+    # ── Main area: mode + fire selector above map ─────────────────────────────
+    col_mode, col_fire = st.columns([1, 2])
+    with col_mode:
         mode = st.radio(
             "Mode",
             ["📍 Held-out test fires", "✏️ Detect on custom area"],
-            help="Browse the held-out evaluation fires, or draw your own area and run the model live.",
+            label_visibility="collapsed",
         )
+    with col_fire:
+        if mode.endswith("test fires"):
+            region_key = st.selectbox(
+                "Fire",
+                options=list(REGIONS.keys()),
+                index=list(REGIONS.keys()).index(DEFAULT_REGION),
+                format_func=lambda k: REGIONS[k]["display_name"],
+                label_visibility="collapsed",
+            )
 
     if mode.endswith("custom area"):
         custom_detection_view()
         return
 
-    # --- Sidebar ---
-    with st.sidebar:
-        region_key = st.selectbox(
-            "Held-out test fire",
-            options=list(REGIONS.keys()),
-            index=list(REGIONS.keys()).index(DEFAULT_REGION),
-            format_func=lambda k: REGIONS[k]["display_name"],
-        )
-        region = REGIONS[region_key]
-        pred_data = load_prediction(region["name"])
+    region = REGIONS[region_key]
+    pred_data = load_prediction(region["name"])
 
-        st.subheader(region["display_name"])
-        st.caption(f"{region['date']} · {region['setting']}")
-        st.markdown(region["description"])
-        st.markdown(f"**Area burned:** {region['acres']} acres")
-
+    # ── Fill sidebar metrics now that we have pred_data ───────────────────────
+    with metrics_placeholder.container():
         st.divider()
-
         if pred_data is not None:
             pred = pred_data["pred_mask"]
             true = pred_data["true_mask"]
             total = pred.size
-
             tp = int(((pred == 1) & (true == 1)).sum())
             fp = int(((pred == 1) & (true == 0)).sum())
             fn = int(((pred == 0) & (true == 1)).sum())
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            recall    = tp / (tp + fn) if (tp + fn) > 0 else 0
             precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-            iou = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0
+            iou       = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0
 
-            st.subheader("Results")
-            st.caption(
-                f"The model was trained on 37 wildfires across 5 US states and has "
-                f"never seen the {region['display_name']}. These numbers reflect how "
-                f"well it generalises to unseen terrain."
-            )
-
+            st.caption(f"**{region['display_name']}** — held-out, never seen during training")
             c1, c2, c3 = st.columns(3)
-            c1.metric(
-                "Recall",
-                f"{recall * 100:.0f}%",
-                help="Of all pixels the dNBR map marks as burned, what fraction did the model detect.",
+            c1.metric("Recall",    f"{recall    * 100:.0f}%",
+                      help="Of all dNBR-burned pixels, what fraction the model detected.")
+            c2.metric("Precision", f"{precision * 100:.0f}%",
+                      help="Of all model-flagged pixels, what fraction were truly burned.")
+            c3.metric("IoU",       f"{iou       * 100:.0f}%",
+                      help="Intersection over Union — overlap between prediction and dNBR reference.")
+            st.caption(
+                f"Model: {pred.sum() / total * 100:.1f}% burned · "
+                f"dNBR ref: {true.sum() / total * 100:.1f}% burned"
             )
-            c2.metric(
-                "Precision",
-                f"{precision * 100:.0f}%",
-                help="Of all pixels the model flagged as burned, what fraction actually appear burned in the dNBR map.",
-            )
-            c3.metric(
-                "IoU",
-                f"{iou * 100:.0f}%",
-                help=(
-                    "Intersection over Union: what fraction of burn pixels were identified by "
-                    "both the model and the dNBR map."
-                ),
-            )
-
-            st.divider()
-            st.markdown(f"**Model detected:** {pred.sum() / total * 100:.1f}% of scene burned")
-            st.markdown(f"**dNBR reference:** {true.sum() / total * 100:.1f}% of scene burned")
-
-            if pred_data.get("dnbr") is not None:
-                st.divider()
-                st.markdown("**dNBR burn severity**")
-                st.caption("Ground-truth severity gradient — toggle the layer on the map.")
-                swatches = []
-                for label, lo, hi, color in SEVERITY_CLASSES:
-                    hi_txt = "∞" if hi == float("inf") else f"{hi:.2f}"
-                    swatches.append(
-                        f"<div style='display:flex;align-items:center;margin:2px 0;'>"
-                        f"<span style='width:14px;height:14px;background:{color};"
-                        f"display:inline-block;margin-right:8px;border:1px solid #999;'></span>"
-                        f"<span style='font-size:0.85rem;'>{label} ({lo:.2f}–{hi_txt})</span>"
-                        f"</div>"
-                    )
-                st.markdown("".join(swatches), unsafe_allow_html=True)
-
         else:
             st.info(
-                "Predictions not yet available.\n\n"
+                "Predictions not available.\n\n"
                 f"```bash\npython run_inference.py --region {region['name']}\n```"
             )
 
-        st.divider()
-        st.caption("Encoder: Prithvi-EO-2.0-300M · 300M params · pretrained on 640k HLS scenes")
-
-    # --- Map ---
+    # ── Map ───────────────────────────────────────────────────────────────────
     with st.spinner("Loading satellite imagery..."):
         m = create_map(region, pred_data, overlay_opacity)
-    st_folium(m, use_container_width=True, height=560, returned_objects=[])
+    st_folium(m, use_container_width=True, height=660, returned_objects=[])
 
-    # --- Comparison plot ---
-    st.subheader("Prediction Comparison")
-    st.caption(
-        "HLS RGB  ·  dNBR ground truth  ·  model prediction  ·  overlay. "
-        "The model sees only post-fire imagery — no before/after comparison is made at inference time."
-    )
-
-    if pred_data is not None:
-        from src.visualize import plot_predictions
-        import matplotlib.pyplot as plt
-
-        fig = plot_predictions(
-            pred_data["image"],
-            pred_data["true_mask"],
-            pred_data["pred_mask"],
-            title=region["display_name"],
+    # --- Comparison plot (collapsed by default) ---
+    with st.expander("Prediction comparison"):
+        st.caption(
+            "HLS RGB  ·  dNBR ground truth  ·  model prediction  ·  overlay. "
+            "The model sees only post-fire imagery — no before/after comparison is made at inference time."
         )
-        st.pyplot(fig, width="stretch")
-        plt.close(fig)
-    else:
-        st.info("Run inference to generate the comparison plot.")
+        if pred_data is not None:
+            from src.visualize import plot_predictions
+            import matplotlib.pyplot as plt
+            fig = plot_predictions(
+                pred_data["image"],
+                pred_data["true_mask"],
+                pred_data["pred_mask"],
+                title=region["display_name"],
+            )
+            st.pyplot(fig, width="stretch")
+            plt.close(fig)
+        else:
+            st.info("Run inference to generate the comparison plot.")
 
     # --- Methodology ---
     with st.expander("How it works"):
