@@ -24,12 +24,25 @@ README results table.
 - Optuna results cell: pull `checkpoints/optuna/` from S3, run the cell.
 - BurnScars comparison cell: `pip install terratorch`, run on the GPU box.
 
-## D. Global fire expansion ⏳ (needs real GWIS data)
-Target ~100 fires (currently 37). Source real fire metadata (coords + pre/post
-dates) from GWIS (gwis.jrc.ec.europa.eu): year ≥ 2015, burned area > 10,000 ha.
-Add each to `configs/train_config.yaml` under `data.fires` with `role: train`,
-prioritizing biome diversity (Australia eucalyptus, Canada/Siberia boreal &
-taiga, Mediterranean, South American cerrado, sub-Saharan savanna). Do not add
-test fires. Fmask masking (the stated prerequisite) is already in place.
-Download via `run_training.py --download-only` in-region on AWS, then fold into
-the retrain (B).
+## D. Global fire expansion ✅ (config done — imagery download still ☁️)
+Done: 55 real GlobFire/GWIS events (year ≥ 2015, burned area > 10,000 ha) added
+to `configs/train_config.yaml`, bringing the registry to **92 train + 4 test =
+96 fires**. Source rows live in `data/globfire/*.csv` (one CSV per biome) and
+were converted with `scripts/globfire_to_config.py`:
+
+```bash
+for b in south_america_cerrado:sa africa_savanna:af mediterranean_shrubland:med \
+         australia_eucalyptus:au canada_boreal:ca siberia_taiga:ru; do
+  csv=${b%:*}; tag=${b#*:}
+  python scripts/globfire_to_config.py --csv data/globfire/$csv.csv --tag $tag \
+    --min-sep-km 50 --max 10 --append-to configs/train_config.yaml
+done
+```
+
+All entries are `role: train` (the script's 60 km leakage guard skips anything
+near a test fire) and biome-balanced (cerrado, sub-Saharan savanna,
+Mediterranean shrubland, Australian eucalyptus, Canadian boreal, Siberian
+taiga). Fmask masking (the stated prerequisite) is already in place.
+
+Remaining ☁️: download the imagery in-region on AWS
+(`run_training.py --download-only`), then fold into the retrain (B).

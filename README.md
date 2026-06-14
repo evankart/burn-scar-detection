@@ -145,3 +145,5 @@ Requires a free [NASA Earthdata account](https://urs.earthdata.nasa.gov/users/ne
 **Colorado:** Cameron Peak (2020) · Calwood (2020) · Spring Creek (2018)
 
 **Arizona:** Bighorn (2020) · Bush (2020) · Telegraph (2021)
+
+**Staged for the next retrain (+55 global GlobFire/GWIS events, 6 biomes):** the registry in `configs/train_config.yaml` now also holds 55 global fires (`gwis_*`) spanning S. American cerrado, sub-Saharan savanna, Mediterranean shrubland, Australian eucalyptus, Canadian boreal, and Siberian taiga — **92 train fires total**. The deployed model above is still the 37-US-fire `finetune_v2`; the global set is downloaded and folded in on the next retrain.
