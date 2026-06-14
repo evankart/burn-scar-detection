@@ -36,8 +36,8 @@ HLS (6 bands, 30m) → normalize_bands → Prithvi-EO-2.0 ViT encoder → FPN de
 ## Fire registry
 All fires defined in `configs/train_config.yaml` under `data.fires`, each with `role: train|test`. `load_config()` in `src/data.py` derives splits. Never hardcode splits elsewhere.
 
-**Current training fires: 37** across CA, OR, AZ, NM, WA, CO.
-**Test fires (never train on, never tune threshold on): 3** — woolsey_fire_2018, east_troublesome_2020, thomas_fire_2017.
+**Current training fires: 92** — 37 US fires (CA, OR, AZ, NM, WA, CO) plus 55 global GlobFire/GWIS events across 6 biomes (S. American cerrado, sub-Saharan savanna, Mediterranean shrubland, Australian eucalyptus, Canadian boreal, Siberian taiga). Global events were selected from `data/globfire/*.csv` via `scripts/globfire_to_config.py` (names tagged `gwis_<biome>_<year>_<id>`, all `role: train`).
+**Test fires (never train on, never tune threshold on): 4** — palisades_fire_2025, eaton_fire_2025, woolsey_fire_2018, thomas_fire_2017.
 
 ## Pending work (priority order)
 
@@ -56,11 +56,14 @@ Implement before adding global fires. HLS QA band has per-pixel bit flags:
 - Bit 1: cirrus, Bit 2: cloud, Bit 8: cloud shadow, Bit 16: snow, Bit 32: water
 Apply in `src/data.py` `load_and_merge_scenes()` — download QA band alongside spectral bands, mask flagged pixels to nodata before computing dNBR or saving cache. Without this, cloudy pixels can contaminate labels in tropical/boreal regions with persistent cloud.
 
-### 3. Global fire expansion (target: ~100 fires total)
-Source: **GWIS (Global Wildfire Information System)** — single source for both US and global fires.
+### 3. Global fire expansion (target: ~100 fires total) — DONE (92 fires)
+Source: **GWIS / GlobFire** — single source for both US and global fires.
 Filter: year ≥ 2015 (HLS era), burned area > 10,000 ha, biome diversity required.
+55 global events were added from `data/globfire/*.csv` (one CSV per biome) via
+`python scripts/globfire_to_config.py --csv <biome>.csv --tag <tag> --min-sep-km 50 --max 10 --append-to configs/train_config.yaml`.
+Imagery still has to be downloaded in-region on AWS (`run_training.py --download-only`) before the retrain.
 
-Target biomes to add (currently underrepresented):
+Target biomes (now represented):
 - Australia — eucalyptus/dry sclerophyll
 - Canada — boreal forest
 - Siberia/Russia — taiga
