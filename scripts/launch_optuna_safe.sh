@@ -1,9 +1,18 @@
 #!/bin/bash
 # Safe Optuna + retrain launcher with monitoring and cost controls.
 # Usage: bash scripts/launch_optuna_safe.sh
-# Cost: ~$10-15 (g5.xlarge at $1.01/hr × 10-15 hours)
+# Runs in background (survives terminal closure via nohup).
+# Cost: ~$12-18 (g5.xlarge at $1.01/hr × 12-18 hours)
 
 set -euo pipefail
+
+# Run in background so terminal closure doesn't kill training
+if [ "${NOHUP_LAUNCHED:-0}" != "1" ]; then
+    export NOHUP_LAUNCHED=1
+    exec nohup "$0" "$@" > training_$(date +%s).log 2>&1 &
+    echo "Training started in background. Check logs with: tail -f training_*.log"
+    exit 0
+fi
 
 INSTANCE_ID=""
 INSTANCE_IP=""
@@ -77,9 +86,17 @@ pip install -q optuna
 export PYTHONPATH=/home/ubuntu/burn-scar-detection:${PYTHONPATH:-}
 export S3_BUCKET=s3://burn-scar-detection
 echo "[HEARTBEAT] $(date): Starting Optuna"
-python -u scripts/optuna_search.py --config configs/finetune_50fires_config.yaml --n-trials 3 --epochs 4 --experiment-name optuna 2>&1 | tee /tmp/optuna.log
-echo "[HEARTBEAT] $(date): Optuna complete, uploading to S3"
-aws s3 cp checkpoints/optuna/ s3://burn-scar-detection/optuna/ --recursive --region us-west-2 || echo "WARNING: S3 upload failed"
+python -u scripts/optuna_search.py --config configs/finetune_50fires_config.yaml --n-trials 3 --epochs 4 --experiment-name optuna 2>&1 | tee /tmp/optuna.log &
+OPTUNA_PID=$!
+# Monitor and upload every 20 minutes in case of interruption
+while kill -0 $OPTUNA_PID 2>/dev/null; do
+    sleep 1200  # 20 minutes
+    echo "[HEARTBEAT] $(date): Uploading Optuna checkpoints to S3..."
+    aws s3 sync checkpoints/optuna/ s3://burn-scar-detection/optuna/ --region us-west-2 --quiet || true
+done
+wait $OPTUNA_PID
+echo "[HEARTBEAT] $(date): Optuna complete, final upload to S3"
+aws s3 sync checkpoints/optuna/ s3://burn-scar-detection/optuna/ --region us-west-2 || echo "WARNING: S3 upload failed"
 ENDSSH
 
 if [ $? -ne 0 ]; then
@@ -100,8 +117,17 @@ cd burn-scar-detection
 export PYTHONPATH=/home/ubuntu/burn-scar-detection:${PYTHONPATH:-}
 export S3_BUCKET=s3://burn-scar-detection
 echo "[HEARTBEAT] $(date): Starting final retrain"
-EXP=finetune_v4_50fires CONFIG=configs/finetune_50fires_config.yaml bash cloud/run_job.sh 2>&1 | tee /tmp/retrain.log
-echo "[HEARTBEAT] $(date): Final retrain complete"
+EXP=finetune_v4_50fires CONFIG=configs/finetune_50fires_config.yaml bash cloud/run_job.sh 2>&1 | tee /tmp/retrain.log &
+RETRAIN_PID=$!
+# Monitor and upload every 30 minutes in case of interruption
+while kill -0 $RETRAIN_PID 2>/dev/null; do
+    sleep 1800  # 30 minutes
+    echo "[HEARTBEAT] $(date): Uploading retrain checkpoints to S3..."
+    aws s3 sync checkpoints/finetune_v4_50fires/ s3://burn-scar-detection/finetune_v4_50fires/ --region us-west-2 --quiet || true
+done
+wait $RETRAIN_PID
+echo "[HEARTBEAT] $(date): Final retrain complete, final upload to S3"
+aws s3 sync checkpoints/finetune_v4_50fires/ s3://burn-scar-detection/finetune_v4_50fires/ --region us-west-2 || true
 ENDSSH
 
 if [ $? -ne 0 ]; then
