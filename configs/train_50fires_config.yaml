@@ -1,8 +1,3 @@
-# Burn Scar Detection - Training Configuration (frozen encoder)
-# Single fire registry: each entry tagged role=train|test. The train/test
-# splits are DERIVED from these roles by src.data.load_config, so they can
-# never drift. finetune_config.yaml is generated from this file.
-
 data:
   bands:
   - B02
@@ -18,35 +13,6 @@ data:
   dnbr_threshold: 0.1
   pred_threshold: 0.65
   fires:
-  - name: palisades_fire_2025
-    role: test
-    lat: 34.05
-    lon: -118.55
-    buffer_km: 18
-    pre_fire_date: '2024-10-01'
-    post_fire_date: '2025-02-15'
-  - name: eaton_fire_2025
-    role: test
-    lat: 34.19
-    lon: -118.07
-    buffer_km: 15
-    pre_fire_date: '2024-10-01'
-    post_fire_date: '2025-03-01'
-    allow_multitile: true
-  - name: woolsey_fire_2018
-    role: test
-    lat: 34.16
-    lon: -118.83
-    buffer_km: 20
-    pre_fire_date: '2018-10-01'
-    post_fire_date: '2018-11-20'
-  - name: thomas_fire_2017
-    role: test
-    lat: 34.5
-    lon: -119.1
-    buffer_km: 45
-    pre_fire_date: '2017-09-01'
-    post_fire_date: '2018-01-15'
   - name: august_complex_2020
     role: train
     lat: 40.0
@@ -306,62 +272,6 @@ data:
     buffer_km: 12
     pre_fire_date: '2017-09-01'
     post_fire_date: '2017-10-25'
-  - name: gwis_sa_2021_25562853
-    role: train
-    lat: -11.5614
-    lon: -43.5926
-    buffer_km: 39
-    pre_fire_date: '2021-08-09'
-    post_fire_date: '2021-10-28'
-  - name: gwis_sa_2021_25563495
-    role: train
-    lat: -14.0401
-    lon: -45.2056
-    buffer_km: 31
-    pre_fire_date: '2021-07-26'
-    post_fire_date: '2021-10-28'
-  - name: gwis_sa_2021_25430983
-    role: train
-    lat: -11.406
-    lon: -44.2444
-    buffer_km: 21
-    pre_fire_date: '2021-07-09'
-    post_fire_date: '2021-10-08'
-  - name: gwis_sa_2021_25563492
-    role: train
-    lat: -13.8441
-    lon: -44.6684
-    buffer_km: 21
-    pre_fire_date: '2021-08-05'
-    post_fire_date: '2021-10-24'
-  - name: gwis_sa_2020_24491560
-    role: train
-    lat: -9.592
-    lon: -43.7021
-    buffer_km: 19
-    pre_fire_date: '2020-08-20'
-    post_fire_date: '2020-11-07'
-  - name: gwis_sa_2015_18542149
-    role: train
-    lat: -9.9001
-    lon: -44.8015
-    buffer_km: 18
-    pre_fire_date: '2015-07-17'
-    post_fire_date: '2015-10-29'
-  - name: gwis_sa_2019_23178145
-    role: train
-    lat: -6.5124
-    lon: -41.2007
-    buffer_km: 17
-    pre_fire_date: '2019-07-05'
-    post_fire_date: '2019-09-11'
-  - name: gwis_sa_2021_25429244
-    role: train
-    lat: -4.8607
-    lon: -41.2717
-    buffer_km: 13
-    pre_fire_date: '2021-07-15'
-    post_fire_date: '2021-09-25'
   - name: gwis_af_2017_21210473
     role: train
     lat: 8.8625
@@ -376,111 +286,6 @@ data:
     buffer_km: 70
     pre_fire_date: '2017-09-09'
     post_fire_date: '2017-12-28'
-  - name: gwis_af_2019_23541201
-    role: train
-    lat: 9.0596
-    lon: 21.7612
-    buffer_km: 70
-    pre_fire_date: '2019-09-26'
-    post_fire_date: '2020-02-01'
-  - name: gwis_af_2018_22268157
-    role: train
-    lat: 13.8446
-    lon: -11.8002
-    buffer_km: 69
-    pre_fire_date: '2018-08-30'
-    post_fire_date: '2018-12-18'
-  - name: gwis_af_2020_24650456
-    role: train
-    lat: 9.8727
-    lon: 30.9963
-    buffer_km: 68
-    pre_fire_date: '2020-09-08'
-    post_fire_date: '2021-01-19'
-  - name: gwis_af_2021_25657151
-    role: train
-    lat: 14.0025
-    lon: -8.968
-    buffer_km: 58
-    pre_fire_date: '2021-08-23'
-    post_fire_date: '2021-12-10'
-  - name: gwis_af_2017_21189051
-    role: train
-    lat: 10.4169
-    lon: -1.8871
-    buffer_km: 50
-    pre_fire_date: '2017-09-15'
-    post_fire_date: '2017-12-28'
-  - name: gwis_med_2017_21182239
-    role: train
-    lat: 40.2836
-    lon: -7.9866
-    buffer_km: 35
-    pre_fire_date: '2017-08-26'
-    post_fire_date: '2017-11-01'
-  - name: gwis_med_2021_25343693
-    role: train
-    lat: 36.911
-    lon: 31.4779
-    buffer_km: 20
-    pre_fire_date: '2021-06-18'
-    post_fire_date: '2021-08-13'
-  - name: gwis_med_2021_25434340
-    role: train
-    lat: 38.8839
-    lon: 23.3188
-    buffer_km: 19
-    pre_fire_date: '2021-06-23'
-    post_fire_date: '2021-08-17'
-  - name: gwis_med_2015_18582283
-    role: train
-    lat: 37.1798
-    lon: 36.0047
-    buffer_km: 17
-    pre_fire_date: '2015-07-16'
-    post_fire_date: '2015-09-28'
-  - name: gwis_med_2018_22023698
-    role: train
-    lat: 37.2991
-    lon: -8.4918
-    buffer_km: 15
-    pre_fire_date: '2018-06-23'
-    post_fire_date: '2018-08-19'
-  - name: gwis_med_2016_19814836
-    role: train
-    lat: 40.8873
-    lon: -8.1976
-    buffer_km: 15
-    pre_fire_date: '2016-06-27'
-    post_fire_date: '2016-08-28'
-  - name: gwis_med_2017_20922119
-    role: train
-    lat: 39.619
-    lon: -8.1229
-    buffer_km: 14
-    pre_fire_date: '2017-07-01'
-    post_fire_date: '2017-08-28'
-  - name: gwis_med_2021_25433647
-    role: train
-    lat: 40.501
-    lon: -4.8532
-    buffer_km: 13
-    pre_fire_date: '2021-07-04'
-    post_fire_date: '2021-08-25'
-  - name: gwis_med_2021_25343686
-    role: train
-    lat: 37.0459
-    lon: 27.7732
-    buffer_km: 11
-    pre_fire_date: '2021-06-18'
-    post_fire_date: '2021-08-14'
-  - name: gwis_med_2020_24357529
-    role: train
-    lat: 37.7292
-    lon: -6.7669
-    buffer_km: 11
-    pre_fire_date: '2020-07-18'
-    post_fire_date: '2020-09-08'
   - name: gwis_au_2019_23651578
     role: train
     lat: -37.443
@@ -502,55 +307,6 @@ data:
     buffer_km: 69
     pre_fire_date: '2019-09-15'
     post_fire_date: '2020-01-19'
-  - name: gwis_au_2019_23570881
-    role: train
-    lat: -36.0631
-    lon: 149.795
-    buffer_km: 57
-    pre_fire_date: '2019-10-20'
-    post_fire_date: '2020-02-24'
-  - name: gwis_au_2019_23492214
-    role: train
-    lat: -30.9926
-    lon: 152.2802
-    buffer_km: 55
-    pre_fire_date: '2019-09-05'
-    post_fire_date: '2019-12-24'
-  - name: gwis_au_2019_23652838
-    role: train
-    lat: -35.0521
-    lon: 150.2808
-    buffer_km: 45
-    pre_fire_date: '2019-10-31'
-    post_fire_date: '2020-01-28'
-  - name: gwis_au_2019_23570757
-    role: train
-    lat: -34.092
-    lon: 150.2347
-    buffer_km: 41
-    pre_fire_date: '2019-10-15'
-    post_fire_date: '2020-01-17'
-  - name: gwis_au_2019_23651548
-    role: train
-    lat: -36.9766
-    lon: 146.8518
-    buffer_km: 28
-    pre_fire_date: '2019-11-18'
-    post_fire_date: '2020-02-05'
-  - name: gwis_au_2019_22622277
-    role: train
-    lat: -42.0286
-    lon: 146.6311
-    buffer_km: 18
-    pre_fire_date: '2018-12-07'
-    post_fire_date: '2019-02-16'
-  - name: gwis_au_2020_23755335
-    role: train
-    lat: -36.8306
-    lon: 149.5334
-    buffer_km: 15
-    pre_fire_date: '2019-12-11'
-    post_fire_date: '2020-02-25'
   - name: gwis_ca_2017_20777771
     role: train
     lat: 52.6566
@@ -572,55 +328,27 @@ data:
     buffer_km: 46
     pre_fire_date: '2017-05-25'
     post_fire_date: '2017-09-04'
-  - name: gwis_ca_2015_18301485
+  - name: gwis_med_2017_21182239
     role: train
-    lat: 56.0892
-    lon: -107.3107
-    buffer_km: 36
-    pre_fire_date: '2015-05-13'
-    post_fire_date: '2015-07-29'
-  - name: gwis_ca_2017_20777943
+    lat: 40.2836
+    lon: -7.9866
+    buffer_km: 35
+    pre_fire_date: '2017-08-26'
+    post_fire_date: '2017-11-01'
+  - name: gwis_med_2021_25343693
     role: train
-    lat: 51.8899
-    lon: -123.0264
-    buffer_km: 34
-    pre_fire_date: '2017-05-27'
-    post_fire_date: '2017-09-09'
-  - name: gwis_ca_2018_21998747
-    role: train
-    lat: 53.223
-    lon: -126.3071
-    buffer_km: 30
-    pre_fire_date: '2018-06-28'
-    post_fire_date: '2018-09-17'
-  - name: gwis_ca_2015_18301464
-    role: train
-    lat: 56.8127
-    lon: -109.2051
-    buffer_km: 26
-    pre_fire_date: '2015-05-07'
-    post_fire_date: '2015-07-28'
-  - name: gwis_ca_2018_21891317
-    role: train
-    lat: 58.0141
-    lon: -130.9799
-    buffer_km: 21
-    pre_fire_date: '2018-06-21'
-    post_fire_date: '2018-09-11'
-  - name: gwis_ca_2021_25299976
-    role: train
-    lat: 51.9474
-    lon: -94.879
-    buffer_km: 21
-    pre_fire_date: '2021-05-24'
+    lat: 36.911
+    lon: 31.4779
+    buffer_km: 20
+    pre_fire_date: '2021-06-18'
     post_fire_date: '2021-08-13'
-  - name: gwis_ca_2021_25207004
+  - name: gwis_med_2021_25434340
     role: train
-    lat: 56.2994
-    lon: -105.2608
-    buffer_km: 11
-    pre_fire_date: '2021-05-21'
-    post_fire_date: '2021-08-04'
+    lat: 38.8839
+    lon: 23.3188
+    buffer_km: 19
+    pre_fire_date: '2021-06-23'
+    post_fire_date: '2021-08-17'
   - name: gwis_ru_2021_25285573
     role: train
     lat: 65.2348
@@ -642,55 +370,20 @@ data:
     buffer_km: 45
     pre_fire_date: '2020-06-09'
     post_fire_date: '2020-09-15'
-  - name: gwis_ru_2019_23145964
+  - name: gwis_sa_2021_25562853
     role: train
-    lat: 66.431
-    lon: 124.947
-    buffer_km: 38
-    pre_fire_date: '2019-06-02'
-    post_fire_date: '2019-09-13'
-  - name: gwis_ru_2021_25402129
+    lat: -11.5614
+    lon: -43.5926
+    buffer_km: 39
+    pre_fire_date: '2021-08-09'
+    post_fire_date: '2021-10-28'
+  - name: gwis_sa_2021_25563495
     role: train
-    lat: 64.3834
-    lon: 127.4897
-    buffer_km: 36
-    pre_fire_date: '2021-06-02'
-    post_fire_date: '2021-08-29'
-  - name: gwis_ru_2016_19559666
-    role: train
-    lat: 56.6539
-    lon: 156.6342
-    buffer_km: 33
-    pre_fire_date: '2016-04-17'
-    post_fire_date: '2016-07-27'
-  - name: gwis_ru_2019_23146072
-    role: train
-    lat: 64.3027
-    lon: 113.5752
+    lat: -14.0401
+    lon: -45.2056
     buffer_km: 31
-    pre_fire_date: '2019-05-24'
-    post_fire_date: '2019-09-03'
-  - name: gwis_ru_2021_25403101
-    role: train
-    lat: 62.5142
-    lon: 121.529
-    buffer_km: 27
-    pre_fire_date: '2021-05-29'
-    post_fire_date: '2021-08-30'
-  - name: gwis_ru_2020_24319226
-    role: train
-    lat: 64.4074
-    lon: 109.644
-    buffer_km: 25
-    pre_fire_date: '2020-06-17'
-    post_fire_date: '2020-09-15'
-  - name: gwis_ru_2020_24325933
-    role: train
-    lat: 63.9123
-    lon: 130.7863
-    buffer_km: 21
-    pre_fire_date: '2020-05-25'
-    post_fire_date: '2020-09-20'
+    pre_fire_date: '2021-07-26'
+    post_fire_date: '2021-10-28'
 model:
   num_classes: 2
   in_channels: 6
