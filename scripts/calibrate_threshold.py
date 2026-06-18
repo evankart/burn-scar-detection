@@ -38,9 +38,8 @@ def main():
     device = get_device()
 
     state = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    ck_ver = state.get("config", {}).get("model", {}).get("prithvi_version", "1.0")
     model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
-                          in_channels=cfg["model"]["in_channels"], prithvi_version=ck_ver)
+                          in_channels=cfg["model"]["in_channels"])
     model.load_state_dict(state["model_state_dict"])
     model = model.to(device)
 
@@ -57,7 +56,7 @@ def main():
             post = _restore_crs(xr.open_dataset(qp, engine="h5netcdf")).rio.reproject_match(pre)
             _, true, image, prob = run_inference(model, post, pre, bands=bands, patch_size=ps,
                                                   device=device, dnbr_threshold=dnbr_t,
-                                                  return_prob=True, prithvi_version=ck_ver)
+                                                  return_prob=True)
             w = water_mask(post)
             if w.shape == prob.shape:
                 prob = prob.copy(); true = true.copy()

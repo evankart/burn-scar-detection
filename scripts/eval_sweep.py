@@ -14,7 +14,7 @@ from src.model import BurnScarModel
 from src.utils import get_device, water_mask
 from run_inference import run_inference
 
-TEST_FIRES = ["woolsey_fire_2018", "east_troublesome_2020", "thomas_fire_2017"]
+TEST_FIRES = ["woolsey_fire_2018", "thomas_fire_2017", "palisades_fire_2025", "eaton_fire_2025"]
 
 
 def metrics(pred, true, valid):
@@ -52,13 +52,8 @@ def main():
     results = {}
     for ckpt in args.checkpoints:
         state = torch.load(ckpt, map_location=device, weights_only=False)
-        # Build the encoder version this checkpoint was trained with (stored in
-        # its config) so a 2.0 checkpoint loads correctly. Bands are the same
-        # physical HLS bands for both versions, so the cached scenes work as-is.
-        ck_ver = state.get("config", {}).get("model", {}).get("prithvi_version", "1.0")
         model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
-                              in_channels=cfg["model"]["in_channels"],
-                              prithvi_version=ck_ver)
+                              in_channels=cfg["model"]["in_channels"])
         model.load_state_dict(state["model_state_dict"])
         model = model.to(device)
         label = ckpt.split("/")[-2]
@@ -68,7 +63,6 @@ def main():
             pred, true, image = run_inference(
                 model, post, pre, bands=bands, patch_size=ps, device=device,
                 dnbr_threshold=dnbr_t, pred_threshold=args.threshold,
-                prithvi_version=ck_ver,
             )
             # Same NDWI water exclusion as the deployed pipeline.
             water = water_mask(post)
