@@ -50,6 +50,18 @@ export EARTHDATA_PASSWORD=EARTHDATA_PASS
 export PYTHONPATH=/home/ubuntu/burn-scar-detection:${PYTHONPATH:-}
 export S3_BUCKET='s3://burn-scar-detection'
 
+echo "[$(date)] ========== RESTORING HLS CACHE FROM S3 =========="
+mkdir -p data/cache
+aws s3 sync s3://burn-scar-detection/hls-cache/ data/cache/ --region us-west-2 || echo "No cache in S3 yet, downloading fresh."
+
+echo "[$(date)] ========== DOWNLOADING HLS IMAGERY =========="
+python -u run_training.py --config configs/finetune_config.yaml --experiment-name optuna --download-only || {
+    echo "[$(date)] ERROR: Download failed"; exit 1;
+}
+
+echo "[$(date)] ========== SAVING HLS CACHE TO S3 =========="
+aws s3 sync data/cache/ s3://burn-scar-detection/hls-cache/ --region us-west-2 || echo "WARNING: Cache upload failed"
+
 echo "[$(date)] ========== OPTUNA SEARCH START =========="
 python -u scripts/optuna_search.py \
   --config configs/finetune_config.yaml \
