@@ -9,9 +9,12 @@ import argparse
 import logging
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 warnings.filterwarnings("ignore", message=".*unauthenticated.*HF Hub.*")
+
+DOWNLOAD_TIMEOUT_SEC = 300  # 5 min per fire; hangs beyond this indicate a bad granule
 
 import numpy as np
 import torch
@@ -29,15 +32,25 @@ logger = logging.getLogger(__name__)
 
 
 def download_regions(regions: list[dict], config_path: str) -> dict:
-    """Download all regions, return {name: {pre: Path, post: Path}}."""
+    """Download all regions, return {name: {pre: Path, post: Path}}.
+
+    Each fire is given DOWNLOAD_TIMEOUT_SEC to complete. Fires that hang
+    (e.g. bad HLS granule, slow tile) are skipped with a warning so one
+    stuck fire can't block the entire pipeline.
+    """
     downloader = HLSDownloader(config_path)
     results = {}
     for region in regions:
-        try:
-            paths = downloader.download_region(region)
-            results[region["name"]] = paths
-        except Exception as e:
-            logger.error(f"Failed to download {region['name']}: {e}")
+        name = region["name"]
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(downloader.download_region, region)
+            try:
+                paths = future.result(timeout=DOWNLOAD_TIMEOUT_SEC)
+                results[name] = paths
+            except FuturesTimeoutError:
+                logger.warning(f"  {name}: SKIPPED — download timed out after {DOWNLOAD_TIMEOUT_SEC}s")
+            except Exception as e:
+                logger.error(f"  {name}: SKIPPED — {e}")
     return results
 
 
