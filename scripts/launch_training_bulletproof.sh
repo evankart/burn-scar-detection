@@ -1,7 +1,14 @@
 #!/bin/bash
-# Bulletproof training launcher using EC2 user data.
-# Runs entire pipeline directly on instance startup.
-# Usage: bash scripts/launch_training_bulletproof.sh
+# Production training launcher: Optuna search (10 trials x 8 epochs) then
+# full retrain with best hyperparams. Runs entirely via EC2 user data — no
+# SSH or local terminal required after launch.
+#
+# Usage:
+#   export EARTHDATA_USER=ekarthei EARTHDATA_PASS=...
+#   bash scripts/launch_training_bulletproof.sh
+#
+# Cost: ~$15-18 (g5.xlarge ~15-18 hrs). Results land in s3://burn-scar-detection/
+# For a quick smoke test first: bash scripts/launch_cloud_test.sh (~$1-2)
 
 set -euo pipefail
 
@@ -49,8 +56,8 @@ export S3_BUCKET='s3://burn-scar-detection'
 
 echo "[$(date)] ========== OPTUNA SEARCH START =========="
 python -u scripts/optuna_search.py \
-  --config configs/finetune_50fires_config.yaml \
-  --n-trials 3 --epochs 4 --experiment-name optuna || {
+  --config configs/finetune_config.yaml \
+  --n-trials 10 --epochs 8 --experiment-name optuna || {
     echo "[$(date)] ERROR: Optuna failed";
     exit 1;
 }
@@ -61,7 +68,7 @@ aws s3 sync checkpoints/optuna/ s3://burn-scar-detection/optuna/ --region us-wes
 }
 
 echo "[$(date)] ========== FINAL RETRAIN START =========="
-EXP=finetune_v4_50fires CONFIG=configs/finetune_50fires_config.yaml bash cloud/run_job.sh || {
+EXP=finetune_v3 CONFIG=configs/finetune_optuna_config.yaml bash cloud/run_job.sh || {
     echo "[$(date)] ERROR: Retrain failed";
     exit 1;
 }
@@ -103,7 +110,8 @@ echo "Cost: ~\$12-18"
 echo ""
 echo "Monitor progress:"
 echo "  aws s3 ls s3://burn-scar-detection/optuna/ --region us-west-2"
-echo "  aws s3 ls s3://burn-scar-detection/finetune_v4_50fires/ --region us-west-2"
+echo "  aws s3 ls s3://burn-scar-detection/finetune_v3/ --region us-west-2"
+echo "  aws s3 cp s3://burn-scar-detection/logs/ . --recursive --region us-west-2"
 echo ""
 echo "Logs will be uploaded to:"
 echo "  s3://burn-scar-detection/logs/"
