@@ -1,0 +1,65 @@
+# Minimal test config for Optuna troubleshooting
+# 3 small training fires, 1 for validation, quick download/patches
+extends: train_config.yaml
+
+data:
+  val_fires: ["holy_2018"]  # Hold out for validation
+  fires:
+  # Test fires (never seen by Optuna)
+  - name: woolsey_fire_2018
+    role: test
+    lat: 34.16
+    lon: -118.83
+    buffer_km: 20
+    pre_fire_date: '2018-10-01'
+    post_fire_date: '2018-11-20'
+  - name: thomas_fire_2017
+    role: test
+    lat: 34.5
+    lon: -119.1
+    buffer_km: 45
+    pre_fire_date: '2017-09-01'
+    post_fire_date: '2018-01-15'
+  # Small training fires (2 for train, 1 for val split)
+  - name: caldor_fire_2021
+    role: train
+    lat: 38.73
+    lon: -120.3
+    buffer_km: 20
+    pre_fire_date: '2021-07-01'
+    post_fire_date: '2021-10-01'
+  - name: holy_2018
+    role: train
+    lat: 33.69
+    lon: -117.53
+    buffer_km: 14
+    pre_fire_date: '2018-07-10'
+    post_fire_date: '2018-09-20'
+  - name: saddleridge_2019
+    role: train
+    lat: 34.31
+    lon: -118.47
+    buffer_km: 10
+    pre_fire_date: '2019-09-20'
+    post_fire_date: '2019-11-05'
+
+model:
+  freeze_backbone: true
+  unfreeze_after_epoch: 2
+
+training:
+  batch_size: 2
+  epochs: 2
+  learning_rate: 3.0e-4
+  backbone_lr_multiplier: 0.05
+  llrd_decay: 0.75
+  weight_decay: 0.05
+  warmup_epochs: 0
+  early_stopping_patience: 3
+  class_weights: [0.5, 0.5]
+  tversky_alpha: 0.5
+  tversky_beta: 0.5
+
+logging:
+  project_name: burn-scar-detection-optuna-test
+  metric_monitor: val_iou_burn_scar
