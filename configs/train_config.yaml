@@ -13,7 +13,7 @@ data:
   - B12
   patch_size: 224
   train_split: 0.9
-  num_workers: 8
+  num_workers: 4
   cache_dir: ./data/cache
   dnbr_threshold: 0.1
   pred_threshold: 0.65
