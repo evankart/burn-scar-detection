@@ -691,6 +691,62 @@ data:
     buffer_km: 21
     pre_fire_date: '2020-05-25'
     post_fire_date: '2020-09-20'
+  - name: gwis_au_2016_20325161
+    role: train
+    lat: -40.4025
+    lon: 148.2695
+    buffer_km: 16
+    pre_fire_date: '2016-09-01'
+    post_fire_date: '2017-01-20'
+  - name: gwis_ca_2015_18302346
+    role: train
+    lat: 60.1336
+    lon: -108.349
+    buffer_km: 11
+    pre_fire_date: '2015-04-01'
+    post_fire_date: '2015-08-15'
+  - name: gwis_med_2017_20708210
+    role: train
+    lat: 39.9699
+    lon: -8.1748
+    buffer_km: 20
+    pre_fire_date: '2017-03-01'
+    post_fire_date: '2017-08-15'
+  - name: gwis_ru_2018_22250595
+    role: train
+    lat: 63.837
+    lon: 120.854
+    buffer_km: 18
+    pre_fire_date: '2018-06-01'
+    post_fire_date: '2018-11-01'
+  - name: gwis_sa_2015_18542506
+    role: train
+    lat: -11.4492
+    lon: -43.5937
+    buffer_km: 34
+    pre_fire_date: '2015-05-01'
+    post_fire_date: '2015-12-01'
+  - name: gwis_sa_2021_25429523
+    role: train
+    lat: -6.4035
+    lon: -41.2426
+    buffer_km: 16
+    pre_fire_date: '2021-05-01'
+    post_fire_date: '2021-11-15'
+  - name: gwis_sa_2021_25650979
+    role: train
+    lat: -9.913
+    lon: -44.847
+    buffer_km: 16
+    pre_fire_date: '2021-07-01'
+    post_fire_date: '2021-12-01'
+  - name: gwis_af_2020_24714348
+    role: train
+    lat: 10.7262
+    lon: -1.9743
+    buffer_km: 48
+    pre_fire_date: '2020-08-01'
+    post_fire_date: '2021-02-15'
 model:
   num_classes: 2
   in_channels: 6
