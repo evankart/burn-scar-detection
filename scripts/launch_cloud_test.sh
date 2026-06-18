@@ -77,6 +77,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
     --region "$REGION" \
     --instance-initiated-shutdown-behavior terminate \
     --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=80,VolumeType=gp3,DeleteOnTermination=true}' \
+    --iam-instance-profile Name=burn-scar-ec2-profile \
     --user-data "$USER_DATA" \
     --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=burn-scar-cloud-test}]' \
     --query 'Instances[0].InstanceId' --output text)

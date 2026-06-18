@@ -94,6 +94,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --region us-west-2 \
   --instance-initiated-shutdown-behavior terminate \
   --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=150,VolumeType=gp3,DeleteOnTermination=true}' \
+  --iam-instance-profile Name=burn-scar-ec2-profile \
   --user-data "$(echo "$USER_DATA" | sed "s/EARTHDATA_USER/$EARTHDATA_USER/g" | sed "s/EARTHDATA_PASS/$EARTHDATA_PASS/g")" \
   --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=burn-scar-training-final}]' \
   --query 'Instances[0].InstanceId' --output text)
