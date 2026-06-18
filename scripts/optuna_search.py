@@ -30,8 +30,12 @@ import copy
 import logging
 import os
 import shutil
+import sys
 import warnings
 from pathlib import Path
+
+# Add project root to sys.path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ.setdefault("MPLBACKEND", "Agg")
