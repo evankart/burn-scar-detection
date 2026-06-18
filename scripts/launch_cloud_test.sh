@@ -40,8 +40,8 @@ pip install -q -r requirements.txt
 pip install -q optuna
 
 echo "[$(date)] Configuring Earthdata..."
-printf 'machine urs.earthdata.nasa.gov login ${EARTHDATA_USER} password ${EARTHDATA_PASS}\n' > /root/.netrc
-chmod 600 /root/.netrc
+export EARTHDATA_USERNAME=${EARTHDATA_USER}
+export EARTHDATA_PASSWORD=${EARTHDATA_PASS}
 
 export PYTHONPATH=/home/ubuntu/burn-scar-detection:\${PYTHONPATH:-}
 export S3_BUCKET='s3://burn-scar-detection'

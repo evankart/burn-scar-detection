@@ -45,12 +45,8 @@ pip install -q -r requirements.txt 2>&1 | grep -E "ERROR|Successfully" || true
 pip install -q earthaccess optuna 2>&1 | tail -1 || true
 
 echo "[$(date)] Configuring Earthdata (credentials embedded)..."
-cat > /root/.netrc << 'NETRC'
-machine urs.earthdata.nasa.gov login EARTHDATA_USER password EARTHDATA_PASS
-NETRC
-sed -i "s/EARTHDATA_USER/$EARTHDATA_USER/g" /root/.netrc
-sed -i "s|EARTHDATA_PASS|$EARTHDATA_PASS|g" /root/.netrc
-chmod 600 /root/.netrc
+export EARTHDATA_USERNAME=EARTHDATA_USER
+export EARTHDATA_PASSWORD=EARTHDATA_PASS
 export PYTHONPATH=/home/ubuntu/burn-scar-detection:${PYTHONPATH:-}
 export S3_BUCKET='s3://burn-scar-detection'
 
