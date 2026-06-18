@@ -45,8 +45,8 @@ pip install -q -r requirements.txt 2>&1 | grep -E "ERROR|Successfully" || true
 pip install -q earthaccess optuna 2>&1 | tail -1 || true
 
 echo "[$(date)] Configuring Earthdata (credentials embedded)..."
-export EARTHDATA_USERNAME=EARTHDATA_USER
-export EARTHDATA_PASSWORD=EARTHDATA_PASS
+export EARTHDATA_USERNAME=__ED_USER__
+export EARTHDATA_PASSWORD=__ED_PASS__
 export PYTHONPATH=/home/ubuntu/burn-scar-detection:${PYTHONPATH:-}
 export S3_BUCKET='s3://burn-scar-detection'
 
@@ -92,7 +92,7 @@ USERDATA
 )
 
 # Base64 encode user data (AWS requirement)
-USER_DATA_B64=$(echo "$USER_DATA" | sed "s/EARTHDATA_USER/$EARTHDATA_USER/g" | sed "s/EARTHDATA_PASS/$EARTHDATA_PASS/g" | base64 | tr -d '\n')
+USER_DATA_B64=$(echo "$USER_DATA" | sed "s/__ED_USER__/$EARTHDATA_USER/g" | sed "s|__ED_PASS__|$EARTHDATA_PASS|g" | base64 | tr -d '\n')
 
 echo "[$(date)] Launching g5.xlarge with user data..."
 INSTANCE_ID=$(aws ec2 run-instances \
@@ -103,7 +103,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --instance-initiated-shutdown-behavior terminate \
   --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=150,VolumeType=gp3,DeleteOnTermination=true}' \
   --iam-instance-profile Name=burn-scar-ec2-profile \
-  --user-data "$(echo "$USER_DATA" | sed "s/EARTHDATA_USER/$EARTHDATA_USER/g" | sed "s/EARTHDATA_PASS/$EARTHDATA_PASS/g")" \
+  --user-data "$(echo "$USER_DATA" | sed "s/__ED_USER__/$EARTHDATA_USER/g" | sed "s|__ED_PASS__|$EARTHDATA_PASS|g")" \
   --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=burn-scar-training-final}]' \
   --query 'Instances[0].InstanceId' --output text)
 
