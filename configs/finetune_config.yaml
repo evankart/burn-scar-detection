@@ -4,7 +4,7 @@ extends: train_config.yaml
 
 data:
   # Hold out whole fires for validation (fire-based split, not random patches).
-  val_fires: ["carr_fire_2018", "holy_2018"]
+  val_fires: ["carr_fire_2018", "holy_2018", "caldor_fire_2021", "bootleg_fire_2021"]
 model:
   freeze_backbone: true
   unfreeze_after_epoch: 2   # decoder-only warmup, then unfreeze the encoder
