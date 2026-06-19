@@ -162,7 +162,7 @@ def make_objective(base_config: dict, dataloaders: dict, epochs: int, work_dir: 
     return objective
 
 
-def save_results(study, work_dir: Path, base_config: dict, config_path: str):
+def save_results(study, work_dir: Path, base_config: dict, config_path: str, retrain_config: str | None = None):
     """Persist best params, study object, plots, and a ready-to-train config."""
     import optuna
 
@@ -194,9 +194,11 @@ def save_results(study, work_dir: Path, base_config: dict, config_path: str):
     except Exception as e:
         logger.warning(f"Could not pickle study: {e}")
 
-    # A finetune config with the best HPs baked in (extends the same base config).
+    # A finetune config with the best HPs baked in. Extends the retrain config
+    # (full dataset), not the search config (which may be a fast subset).
+    extends_name = Path(retrain_config).name if retrain_config else Path(config_path).name
     tuned_cfg = {
-        "extends": Path(config_path).name,
+        "extends": extends_name,
         "training": {
             "learning_rate": float(best.params["learning_rate"]),
             "backbone_lr_multiplier": float(best.params["backbone_lr_multiplier"]),
@@ -235,6 +237,9 @@ def save_results(study, work_dir: Path, base_config: dict, config_path: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/finetune_config.yaml")
+    parser.add_argument("--retrain-config", default="configs/finetune_config.yaml",
+                        help="Config the generated finetune_optuna_config.yaml will extend. "
+                             "Use the full-dataset config here even when --config is a fast subset.")
     parser.add_argument("--n-trials", type=int, default=10)
     parser.add_argument("--epochs", type=int, default=8,
                         help="Epochs per trial (shorter than the final retrain to save GPU hours).")
@@ -262,7 +267,7 @@ def main():
     logger.info(f"=== Optuna search: {args.n_trials} trials, {args.epochs} epochs each ===")
     study.optimize(objective, n_trials=args.n_trials)
 
-    save_results(study, work_dir, config, args.config)
+    save_results(study, work_dir, config, args.config, retrain_config=args.retrain_config)
     logger.info("=== Search complete ===")
 
 
