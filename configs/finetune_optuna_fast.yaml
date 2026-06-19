@@ -28,10 +28,11 @@ data:
     - {name: palisades_fire_2025,    role: test}
     - {name: eaton_fire_2025,        role: test}
   val_fires: ["carr_fire_2018", "holy_2018", "caldor_fire_2021", "bootleg_fire_2021"]
+  max_patches_per_region: 300  # cap RAM: 14 fires × 300 ≈ 4200 patches ≈ 5GB
 
 model:
   freeze_backbone: true
-  unfreeze_after_epoch: 2
+  unfreeze_after_epoch: 999  # keep frozen throughout Optuna; avoids GPU spike
 
 training:
   batch_size: 2
