@@ -4,17 +4,19 @@
 Wildfire burn scar segmentation from HLS (Harmonized Landsat Sentinel-2) imagery using Prithvi-EO-2.0-300M (IBM/NASA) with an FPN decoder. Deployed at huggingface.co/spaces/evankart/burn-scar-detection. All data is HLS (`HLSS30.v2.0`) via `earthaccess` — no Sentinel-2/Planetary Computer code remains.
 
 ## Hard constraints (never violate)
-- **Never tune the decision threshold on test fires.** Threshold is fixed at 0.5 a priori. Test fires are `woolsey_fire_2018`, `east_troublesome_2020`, `thomas_fire_2017`.
+- **Never tune the decision threshold on test fires.** Threshold is fixed at 0.5 a priori. Test fires are `woolsey_fire_2018`, `thomas_fire_2017`, `palisades_fire_2025`, `eaton_fire_2025`.
 - **Never commit secrets.** Earthdata credentials, AWS keys, HF tokens go in env vars or `~/.netrc` only.
 - **Use `cloud-deploy` branch** for all changes, not `main`.
 - **Co-author commits:** `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
 
 ## Current model
-- **Checkpoint:** `checkpoints/finetune_v2/best_model.pt` (on HF dataset repo `evankart/burn-scar-detection-data`)
+- **Checkpoint:** `checkpoints/finetune_v3/best_model.pt` (on HF dataset repo `evankart/burn-scar-detection-data`)
 - **Encoder:** Prithvi-EO-2.0-300M (ViT-Large, embed_dim=1024, depth=24, frozen epochs 1-2 then unfrozen)
 - **Decoder:** FPN, 3.8M trainable params
 - **Bands:** B02, B03, B04, B8A, B11, B12 (HLS Sentinel naming)
-- **Results:** Woolsey 0.677 / East Troublesome 0.594 / Thomas 0.665 / **Macro IoU 0.645**
+- **Results (finetune_v3, 100 fires, Optuna-tuned HPs):**
+  - Woolsey 0.890/0.922/**0.828** | Thomas 0.947/0.733/**0.704** | Palisades 0.464/0.719/**0.393** | Eaton 0.959/0.730/**0.708** | **Macro IoU 0.658**
+  - Palisades low precision reflects urban interface spectral signature — known limitation
 - No brightness gain applied (fine-tuning adapted encoder to HLS distribution)
 
 ## Architecture

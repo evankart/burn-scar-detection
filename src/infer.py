@@ -21,7 +21,7 @@ _CONFIG = "configs/train_config.yaml"
 HF_REPO = "evankart/burn-scar-detection-data"
 
 
-def load_model(checkpoint: str = "checkpoints/finetune_v2/best_model.pt",
+def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model.pt",
                config_path: str = _CONFIG):
     """Load the deployed model once (cache with st.cache_resource in the app)."""
     cfg = load_config(config_path)
