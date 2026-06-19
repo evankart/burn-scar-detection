@@ -36,6 +36,9 @@ apt-get install -y -qq git curl wget > /dev/null
 echo "[$(date)] Cloning repo..."
 git clone -b cloud-deploy https://github.com/evankart/burn-scar-detection.git /home/ubuntu/burn-scar-detection 2>&1 | grep -E "Cloning|fatal|ERROR" || true
 
+echo "[$(date)] Fixing ownership (git clone runs as root)..."
+chown -R ubuntu:ubuntu /home/ubuntu/burn-scar-detection
+
 echo "[$(date)] Activating PyTorch environment..."
 source /opt/pytorch/bin/activate
 
@@ -47,6 +50,8 @@ pip install -q earthaccess optuna 2>&1 | tail -1 || true
 echo "[$(date)] Configuring Earthdata (credentials embedded)..."
 export EARTHDATA_USERNAME=__ED_USER__
 export EARTHDATA_PASSWORD=__ED_PASS__
+export EARTHDATA_USER=__ED_USER__
+export EARTHDATA_PASS=__ED_PASS__
 export PYTHONPATH=/home/ubuntu/burn-scar-detection:${PYTHONPATH:-}
 export S3_BUCKET='s3://burn-scar-detection'
 
@@ -64,8 +69,8 @@ aws s3 sync data/cache/ s3://burn-scar-detection/hls-cache/ --region us-west-2 |
 
 echo "[$(date)] ========== OPTUNA SEARCH START =========="
 python -u scripts/optuna_search.py \
-  --config configs/finetune_config.yaml \
-  --n-trials 10 --epochs 8 --experiment-name optuna || {
+  --config configs/finetune_optuna_fast.yaml \
+  --n-trials 7 --epochs 5 --experiment-name optuna || {
     echo "[$(date)] ERROR: Optuna failed";
     exit 1;
 }
