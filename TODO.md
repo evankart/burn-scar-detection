@@ -1,48 +1,38 @@
-# Remaining work (cloud / external data)
+# Remaining work
 
-The local code for all seven original items is implemented (Fmask masking,
-multi-tile warning, Optuna script, notebook updates, BurnScars comparison
-section). What's left runs on the cloud GPU box or needs external data.
+## Done ✅
+- Optuna hyperparameter search (7 trials × 5 epochs, TPE, frozen encoder)
+- Global fire expansion: 55 GlobFire/GWIS events across 6 biomes → 100 train fires total
+- Fmask per-pixel cloud masking in `src/data.py`
+- Full retrain (finetune_v3) with best Optuna HPs on 100 fires
+- Results: Woolsey 0.828 / Thomas 0.704 / Eaton 0.708 / Palisades 0.393 / **Macro 0.658**
 
-## A. Run the Optuna search ☁️
+## Pending
+
+### A. Upload finetune_v3 to HF + deploy ☁️
 ```bash
-SELF_TERMINATE=1 bash cloud/run_optuna.sh      # N_TRIALS=10 EPOCHS=8 default
+huggingface-cli upload evankart/burn-scar-detection-data \
+  checkpoints/finetune_v3/best_model.pt \
+  checkpoints/finetune_v3/best_model.pt --repo-type dataset
+python scripts/push_to_space.py
 ```
-Uploads `checkpoints/optuna/` (study.pkl, best_params.yaml, plots) and
-`configs/finetune_optuna_config.yaml` to S3. Objective: val burn-class IoU on
-carr + holy. See `cloud/RUNBOOK.md`.
+Re-run `run_inference.py` on the four test fires to regenerate `.npz` predictions for the app.
 
-## B. Retrain with the tuned config ☁️ (after A)
+### B. Notebook improvements (`notebooks/demo_analysis.ipynb`)
+- Remove brightness gain investigation section (Prithvi 1.0 artifact, no longer relevant)
+- Add finetune_v3 training curves (from `checkpoints/finetune_v3/history.pt`)
+- Add Optuna results: best trial, param importance plot, search trajectory (from `checkpoints/optuna/`)
+- Add inference visualizations: side-by-side pred vs dNBR label on all 4 test fires
+
+### C. Prithvi BurnScars model comparison (notebook)
+Compare against `ibm-nasa-geospatial/Prithvi-EO-2.0-300M-BurnScars` (IBM/NASA's
+purpose-built burn scar model, UNet decoder). Run their model on the 4 held-out test
+fires at fixed threshold 0.5. Report P/R/IoU alongside ours.
 ```bash
-EXP=finetune_v3 CONFIG=configs/finetune_optuna_config.yaml \
-  SELF_TERMINATE=1 bash cloud/run_job.sh
-```
-Then `run_inference.py` on the four test fires at threshold 0.5 and update the
-README results table.
-
-## C. Populate the deferred notebook cells ☁️ (after A/B)
-- Optuna results cell: pull `checkpoints/optuna/` from S3, run the cell.
-- BurnScars comparison cell: `pip install terratorch`, run on the GPU box.
-
-## D. Global fire expansion ✅ (config done — imagery download still ☁️)
-Done: 55 real GlobFire/GWIS events (year ≥ 2015, burned area > 10,000 ha) added
-to `configs/train_config.yaml`, bringing the registry to **92 train + 4 test =
-96 fires**. Source rows live in `data/globfire/*.csv` (one CSV per biome) and
-were converted with `scripts/globfire_to_config.py`:
-
-```bash
-for b in south_america_cerrado:sa africa_savanna:af mediterranean_shrubland:med \
-         australia_eucalyptus:au canada_boreal:ca siberia_taiga:ru; do
-  csv=${b%:*}; tag=${b#*:}
-  python scripts/globfire_to_config.py --csv data/globfire/$csv.csv --tag $tag \
-    --min-sep-km 50 --max 10 --append-to configs/train_config.yaml
-done
+pip install terratorch   # on GPU instance or locally
 ```
 
-All entries are `role: train` (the script's 60 km leakage guard skips anything
-near a test fire) and biome-balanced (cerrado, sub-Saharan savanna,
-Mediterranean shrubland, Australian eucalyptus, Canadian boreal, Siberian
-taiga). Fmask masking (the stated prerequisite) is already in place.
-
-Remaining ☁️: download the imagery in-region on AWS
-(`run_training.py --download-only`), then fold into the retrain (B).
+### D. UI: multi-tile merge in custom AOI tab
+When user draws a bounding box spanning two MGRS tiles, current code locks to one tile
+and silently drops the other half. Fix: detect overlap, warn user, merge scenes from
+both tiles into a mosaic. Implement in `src/app/streamlit_app.py` and `src/infer.py`.
