@@ -38,6 +38,9 @@ git clone -b cloud-deploy https://github.com/evankart/burn-scar-detection.git /h
 
 echo "[$(date)] Fixing ownership (git clone runs as root)..."
 chown -R ubuntu:ubuntu /home/ubuntu/burn-scar-detection
+# Pre-create checkpoints/ as ubuntu so runtime writes don't hit root-owned dirs.
+mkdir -p /home/ubuntu/burn-scar-detection/checkpoints
+chown -R ubuntu:ubuntu /home/ubuntu/burn-scar-detection/checkpoints
 
 echo "[$(date)] Activating PyTorch environment..."
 source /opt/pytorch/bin/activate
@@ -70,6 +73,7 @@ aws s3 sync data/cache/ s3://burn-scar-detection/hls-cache/ --region us-west-2 |
 echo "[$(date)] ========== OPTUNA SEARCH START =========="
 python -u scripts/optuna_search.py \
   --config configs/finetune_optuna_fast.yaml \
+  --retrain-config configs/finetune_config.yaml \
   --n-trials 7 --epochs 5 --experiment-name optuna || {
     echo "[$(date)] ERROR: Optuna failed";
     exit 1;
