@@ -1,290 +1,31 @@
+# Prithvi-EO-2.0-300M encoder fine-tune. Inherits the fire registry and all
+# unset values from train_config.yaml; only the fine-tune overrides live here.
+extends: train_config.yaml
+
 data:
-  bands:
-  - B02
-  - B03
-  - B04
-  - B8A
-  - B11
-  - B12
-  patch_size: 224
-  train_split: 0.9
-  num_workers: 4
-  cache_dir: ./data/cache
-  dnbr_threshold: 0.1
-  pred_threshold: 0.5
-  test_regions:
-  - name: woolsey_fire_2018
-    lat: 34.16
-    lon: -118.83
-    buffer_km: 20
-    pre_fire_date: '2018-10-01'
-    post_fire_date: '2018-11-20'
-  - name: east_troublesome_2020
-    lat: 40.15
-    lon: -105.85
-    buffer_km: 30
-    pre_fire_date: '2020-08-01'
-    post_fire_date: '2020-11-15'
-  - name: thomas_fire_2017
-    lat: 34.5
-    lon: -119.1
-    buffer_km: 45
-    pre_fire_date: '2017-09-01'
-    post_fire_date: '2018-01-15'
-  train_regions:
-  - name: august_complex_2020
-    lat: 40.0
-    lon: -122.6
-    buffer_km: 70
-    pre_fire_date: '2020-05-01'
-    post_fire_date: '2020-11-15'
-  - name: mendocino_complex_2018
-    lat: 39.25
-    lon: -122.7
-    buffer_km: 55
-    pre_fire_date: '2018-05-01'
-    post_fire_date: '2018-10-01'
-  - name: scu_lightning_complex_2020
-    lat: 37.55
-    lon: -121.45
-    buffer_km: 45
-    pre_fire_date: '2020-05-01'
-    post_fire_date: '2020-10-15'
-  - name: caldor_fire_2021
-    lat: 38.73
-    lon: -120.3
-    buffer_km: 20
-    pre_fire_date: '2021-07-01'
-    post_fire_date: '2021-10-01'
-  - name: lnu_lightning_complex_2020
-    lat: 38.6
-    lon: -122.2
-    buffer_km: 45
-    pre_fire_date: '2020-05-01'
-    post_fire_date: '2020-10-15'
-  - name: north_complex_2020
-    lat: 39.75
-    lon: -121.3
-    buffer_km: 40
-    pre_fire_date: '2020-05-01'
-    post_fire_date: '2020-12-15'
-  - name: carr_fire_2018
-    lat: 40.65
-    lon: -122.65
-    buffer_km: 35
-    pre_fire_date: '2018-04-01'
-    post_fire_date: '2018-09-15'
-  - name: dixie_fire_2021
-    lat: 40.32
-    lon: -120.86
-    buffer_km: 40
-    pre_fire_date: '2021-06-01'
-    post_fire_date: '2021-10-15'
-  - name: antelope_fire_2021
-    lat: 40.4
-    lon: -120.2
-    buffer_km: 35
-    pre_fire_date: '2021-04-01'
-    post_fire_date: '2021-09-01'
-  - name: bootleg_fire_2021
-    lat: 42.6
-    lon: -121.35
-    buffer_km: 50
-    pre_fire_date: '2021-05-01'
-    post_fire_date: '2021-08-20'
-  - name: pearl_hill_2020
-    lat: 47.95
-    lon: -119.67
-    buffer_km: 40
-    pre_fire_date: '2020-07-01'
-    post_fire_date: '2020-09-15'
-  - name: bobcat_2020
-    lat: 34.24
-    lon: -117.86
-    buffer_km: 25
-    pre_fire_date: '2020-08-10'
-    post_fire_date: '2020-10-20'
-  - name: holy_2018
-    lat: 33.69
-    lon: -117.53
-    buffer_km: 14
-    pre_fire_date: '2018-07-10'
-    post_fire_date: '2018-09-20'
-  - name: apple_2020
-    lat: 34.0
-    lon: -116.9
-    buffer_km: 16
-    pre_fire_date: '2020-07-10'
-    post_fire_date: '2020-09-20'
-  - name: cranston_2018
-    lat: 33.74
-    lon: -116.71
-    buffer_km: 12
-    pre_fire_date: '2018-07-01'
-    post_fire_date: '2018-09-05'
-  - name: saddleridge_2019
-    lat: 34.31
-    lon: -118.47
-    buffer_km: 10
-    pre_fire_date: '2019-09-20'
-    post_fire_date: '2019-11-05'
-  - name: el_dorado_2020
-    lat: 34.1
-    lon: -117.0
-    buffer_km: 16
-    pre_fire_date: '2020-08-20'
-    post_fire_date: '2020-10-25'
-  - name: valley_fire_2020
-    lat: 32.82
-    lon: -116.7
-    buffer_km: 12
-    pre_fire_date: '2020-08-20'
-    post_fire_date: '2020-10-25'
-  - name: lake_fire_2020
-    lat: 34.66
-    lon: -118.55
-    buffer_km: 16
-    pre_fire_date: '2020-07-20'
-    post_fire_date: '2020-09-25'
-  - name: camp_fire_2018
-    lat: 39.81
-    lon: -121.44
-    buffer_km: 20
-    pre_fire_date: '2018-10-01'
-    post_fire_date: '2018-12-05'
-  - name: tubbs_2017
-    lat: 38.55
-    lon: -122.62
-    buffer_km: 16
-    pre_fire_date: '2017-09-01'
-    post_fire_date: '2017-11-10'
-  - name: kincade_2019
-    lat: 38.79
-    lon: -122.78
-    buffer_km: 18
-    pre_fire_date: '2019-09-15'
-    post_fire_date: '2019-11-20'
-  - name: glass_2020
-    lat: 38.56
-    lon: -122.5
-    buffer_km: 16
-    pre_fire_date: '2020-08-20'
-    post_fire_date: '2020-10-25'
-  - name: monument_2021
-    lat: 40.6
-    lon: -123.3
-    buffer_km: 30
-    pre_fire_date: '2021-07-15'
-    post_fire_date: '2021-10-20'
-  - name: mosquito_2022
-    lat: 39.0
-    lon: -120.73
-    buffer_km: 22
-    pre_fire_date: '2022-08-25'
-    post_fire_date: '2022-10-25'
-  - name: river_carmel_2020
-    lat: 36.3
-    lon: -121.55
-    buffer_km: 20
-    pre_fire_date: '2020-08-20'
-    post_fire_date: '2020-10-20'
-  - name: holiday_farm_2020
-    lat: 44.13
-    lon: -122.45
-    buffer_km: 22
-    pre_fire_date: '2020-08-25'
-    post_fire_date: '2020-10-25'
-  - name: beachie_creek_2020
-    lat: 44.75
-    lon: -122.18
-    buffer_km: 25
-    pre_fire_date: '2020-08-25'
-    post_fire_date: '2020-10-25'
-  - name: cameron_peak_2020
-    lat: 40.6
-    lon: -105.72
-    buffer_km: 28
-    pre_fire_date: '2020-08-01'
-    post_fire_date: '2020-11-05'
-  - name: calwood_2020
-    lat: 40.13
-    lon: -105.38
-    buffer_km: 12
-    pre_fire_date: '2020-10-01'
-    post_fire_date: '2020-11-15'
-  - name: spring_creek_2018
-    lat: 37.5
-    lon: -105.02
-    buffer_km: 18
-    pre_fire_date: '2018-06-01'
-    post_fire_date: '2018-08-10'
-  - name: bighorn_2020_az
-    lat: 32.43
-    lon: -110.78
-    buffer_km: 18
-    pre_fire_date: '2020-05-20'
-    post_fire_date: '2020-07-25'
-  - name: bush_2020_az
-    lat: 33.8
-    lon: -111.3
-    buffer_km: 25
-    pre_fire_date: '2020-05-20'
-    post_fire_date: '2020-07-25'
-  - name: telegraph_2021_az
-    lat: 33.1
-    lon: -110.9
-    buffer_km: 25
-    pre_fire_date: '2021-05-20'
-    post_fire_date: '2021-07-25'
-  - name: blue_ridge_2020
-    lat: 33.88
-    lon: -117.68
-    buffer_km: 12
-    pre_fire_date: '2020-10-01'
-    post_fire_date: '2020-11-20'
-  - name: bond_2020
-    lat: 33.75
-    lon: -117.62
-    buffer_km: 12
-    pre_fire_date: '2020-11-25'
-    post_fire_date: '2021-01-15'
-  - name: la_tuna_2017
-    lat: 34.23
-    lon: -118.3
-    buffer_km: 12
-    pre_fire_date: '2017-09-01'
-    post_fire_date: '2017-10-25'
-  val_fires:
-  - carr_fire_2018
-  - holy_2018
+  # Hold out whole fires for validation (fire-based split, not random patches).
+  val_fires: ["carr_fire_2018", "holy_2018", "caldor_fire_2021", "bootleg_fire_2021"]
+  # Cap patches per fire: 100 fires × 50 patches × 1.35MB ≈ 6.5GB RAM, safe on 16GB instance.
+  # 100 cap OOMed: African fires have huge netcdfs that spike memory during patch extraction.
+  max_patches_per_region: 50
 model:
-  num_classes: 2
-  in_channels: 6
   freeze_backbone: true
-  unfreeze_after_epoch: 2
+  unfreeze_after_epoch: 2   # decoder-only warmup, then unfreeze the encoder
+
 training:
-  batch_size: 16
+  batch_size: 2   # ViT-Large OOMs at 4 on A10G 24GB; using 2
   epochs: 16
-  learning_rate: 0.0003
-  backbone_lr_multiplier: 0.05
+  learning_rate: 3.0e-4
+  backbone_lr_multiplier: 0.05   # encoder base LR = 5% of decoder LR
+  llrd_decay: 0.75               # shallow encoder layers get progressively lower LR
   weight_decay: 0.05
   warmup_epochs: 1
   early_stopping_patience: 5
-  mixed_precision: true
-  seed: 42
-  class_weights:
-  - 0.5
-  - 0.5
-  augmentations:
-    random_flip: true
-    random_rotate: true
-    random_crop: true
-    color_jitter: false
-    random_resized_crop: true
-  llrd_decay: 0.75
+  class_weights: [0.5, 0.5]      # neutral; fine-tuning can learn precision directly
   tversky_alpha: 0.5
   tversky_beta: 0.5
+  augmentations:
+    random_resized_crop: true
+
 logging:
   project_name: burn-scar-detection-finetune
-  log_every_n_steps: 10
-  metric_monitor: val_mean_iou

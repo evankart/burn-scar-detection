@@ -13,10 +13,10 @@ from pathlib import Path
 import numpy as np
 import torch
 import xarray as xr
-import yaml
 
-from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs
+from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs, load_config, FMASK_BAD_BITS
 from src.model import BurnScarModel
+from src.utils import get_device, water_mask, cloud_over_water_mask
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,16 +32,11 @@ def run_inference(
     dnbr_threshold: float = 0.10,
     pred_threshold: float = 0.4,
     return_prob: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Run sliding-window inference on a full scene.
-    Returns (pred_mask, true_mask, image), or with return_prob=True also appends
-    the continuous burn-probability map (pre-threshold) for threshold calibration.
-
-    dnbr_threshold must match the value used to generate training labels,
-    otherwise the model is scored against a different definition of "burned"
-    than it was trained on.
-    """
+    water_ndwi_threshold: float = 0.0,
+) -> tuple[np.ndarray, ...]:
+    """Sliding-window inference on a full scene. Returns (pred_mask, true_mask,
+    image); with return_prob=True also appends the pre-threshold probability map.
+    dnbr_threshold must match the training-label value. See README."""
     image = normalize_bands(post_ds, bands)
     true_mask = generate_burn_mask(pre_ds, post_ds, dnbr_threshold=dnbr_threshold)
 
@@ -49,17 +44,20 @@ def run_inference(
     pred_mask = np.zeros((h, w), dtype=np.float32)
     count_mask = np.zeros((h, w), dtype=np.float32)
 
-    # Per-pixel validity (NaN or all-zero bands = nodata), computed once. Lets us
-    # impute nodata *within* a patch rather than discarding the whole 224x224
-    # window: a single cloud pixel used to skip the patch entirely, leaving large
-    # valid (and often burned) areas with no prediction.
+    # Per-pixel validity: nodata (NaN from Fmask-during-download or sensor gaps) excluded.
     valid_px = ~(np.isnan(image).any(axis=0) | (np.nan_to_num(image).max(axis=0) == 0))
+
+    # Pre-inference cloud/water exclusion — applied before the model sees any pixels.
+    # Fmask cloud flag (bit 2) is intentionally excluded here: it triggers on smoke/haze
+    # over burned land (observed: Thomas fire recall 0.73 → 0.26 when included).
+    # water_mask + cloud_over_water_mask are sufficient to prevent ocean/fog false positives.
+    pre_cloud = water_mask(post_ds, threshold=water_ndwi_threshold)
+    valid_px &= ~pre_cloud
 
     stride = patch_size // 2
     model.eval()
 
-    # Edge-anchored grid: append a final row/col flush to the scene edge so the
-    # bottom/right strips a fixed stride would otherwise skip are still covered.
+    # Edge-anchored grid: final row/col flush to the edge so border strips are covered.
     ys = list(range(0, h - patch_size + 1, stride))
     xs = list(range(0, w - patch_size + 1, stride))
     if ys and ys[-1] != h - patch_size:
@@ -73,8 +71,7 @@ def run_inference(
                 pv = valid_px[y : y + patch_size, x : x + patch_size]
                 if not pv.any():
                     continue
-                # Impute nodata to 0 (≈ per-band mean in z-scored space) so the
-                # model can score the valid pixels; only those are accumulated.
+                # Impute nodata to 0; only valid pixels are accumulated.
                 patch = np.nan_to_num(image[:, y : y + patch_size, x : x + patch_size], nan=0.0)
                 tensor = torch.from_numpy(patch).unsqueeze(0).float().to(device)
                 probs = torch.softmax(model(tensor), dim=1)[0, 1].cpu().numpy()
@@ -88,16 +85,20 @@ def run_inference(
     pred_mask[covered] /= count_mask[covered]
     pred_binary = (pred_mask > pred_threshold).astype(np.uint8)
 
-    # Trim a thin border of the valid region — predictions abutting imputed
-    # nodata are unreliable.
+    # Trim a thin border of the valid region (predictions abutting nodata are unreliable).
     from scipy.ndimage import binary_erosion
-    trim = ~binary_erosion(valid_px, iterations=10)
+    trim = ~binary_erosion(valid_px, iterations=2)
     pred_binary[trim] = 0
+
+    # Zero out cloud/water pixels in pred and true masks.
+    pred_binary[pre_cloud] = 0
+    true_mask[pre_cloud] = 0
 
     if return_prob:
         prob = pred_mask.copy()
         prob[trim] = 0.0
         prob[~covered] = 0.0
+        prob[pre_cloud] = 0.0
         return pred_binary, true_mask, image, prob
 
     return pred_binary, true_mask, image
@@ -107,18 +108,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", required=True, help="Region name or 'all'")
     parser.add_argument("--config", default="configs/train_config.yaml")
-    parser.add_argument("--checkpoint", default="checkpoints/balanced_chaparral/best_model.pt")
+    parser.add_argument("--checkpoint", default="checkpoints/finetune_v3/best_model.pt")
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
-
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+    config = load_config(args.config)
+    device = get_device()
 
     model = BurnScarModel(
         num_classes=config["model"]["num_classes"],
@@ -151,8 +145,21 @@ def main():
         pre_path = Path(config["data"]["cache_dir"]) / f"{name}_pre.nc"
         post_path = Path(config["data"]["cache_dir"]) / f"{name}_post.nc"
 
+        for path in (pre_path, post_path):
+            if not path.exists():
+                import subprocess
+                s3_key = f"s3://burn-scar-detection/hls-cache/{path.name}"
+                logger.info(f"{path.name} not cached — pulling from {s3_key}")
+                r = subprocess.run(
+                    ["aws", "s3", "cp", s3_key, str(path), "--region", "us-west-2"],
+                    capture_output=True,
+                )
+                if r.returncode != 0:
+                    logger.warning(f"Data not found for {name} locally or on S3. Run download first.")
+                    break
+        else:
+            pass  # both paths exist, continue below
         if not pre_path.exists() or not post_path.exists():
-            logger.warning(f"Data not found for {name}. Run download first.")
             continue
 
         logger.info(f"Running inference on {name}...")
@@ -160,6 +167,7 @@ def main():
         post_ds = _restore_crs(xr.open_dataset(post_path, engine="h5netcdf"))
         post_ds = post_ds.rio.reproject_match(pre_ds)
 
+        ndwi_thresh = config["data"].get("water_ndwi_threshold", 0.0)
         pred_mask, true_mask, image = run_inference(
             model, post_ds, pre_ds,
             bands=config["data"]["bands"],
@@ -167,37 +175,26 @@ def main():
             device=device,
             dnbr_threshold=config["data"].get("dnbr_threshold", 0.10),
             pred_threshold=config["data"].get("pred_threshold", 0.4),
+            water_ndwi_threshold=ndwi_thresh,
         )
 
-        # Continuous dNBR (same grid as true_mask) for the severity overlay.
+        # Continuous dNBR for the severity overlay — also mask water/clouds.
         dnbr = compute_dnbr(pre_ds, post_ds)
-
-        # Water exclusion. Open water is not burnable, yet both the model
-        # (post-only) and the dNBR label produce spurious "burned" pixels over
-        # it: where NIR ≈ SWIR ≈ 0, NBR is pure noise and dNBR randomly crosses
-        # the threshold. Mask water deterministically from the NDWI spectral
-        # index (green vs NIR) — independent of the model and never tuned on the
-        # test fires. Burn scars sit at NDWI ≤ 0 (NIR ≥ green), so a 0 cutoff
-        # removes ocean/lakes without eating real burns.
-        green = post_ds["B03"].values.astype(np.float32)
-        nir = post_ds["B8A"].values.astype(np.float32)
-        ndwi = (green - nir) / (green + nir + 1e-8)
-        water = ndwi > config["data"].get("water_ndwi_threshold", 0.0)
-        if water.shape == pred_mask.shape:
-            pred_mask[water] = 0
-            true_mask[water] = 0
-            dnbr[water] = np.nan
-            logger.info(f"Masked {int(water.sum())} water pixels (NDWI>0)")
+        water = water_mask(post_ds, threshold=ndwi_thresh)
+        clouds = cloud_over_water_mask(post_ds)
+        if "Fmask" in post_ds:
+            clouds |= (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS) != 0
+        combined = water | clouds
+        if combined.shape == dnbr.shape:
+            dnbr[combined] = np.nan
 
         try:
             from pyproj import Transformer
             crs = post_ds.rio.crs
             minx, miny, maxx, maxy = post_ds.rio.bounds()
             transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-            # A north-up UTM box maps to a slightly rotated quadrilateral in
-            # lat/lon, so the extreme lon/lat fall on the NW/SE corners, not the
-            # SW/NE pair the old 2-corner transform used. Densify all four edges
-            # and take min/max so the axis-aligned bbox encloses the true footprint.
+            # Densify all four UTM edges and take min/max so the lat/lon bbox
+            # encloses the rotated footprint.
             n = 50
             xs_edge = np.linspace(minx, maxx, n)
             ys_edge = np.linspace(miny, maxy, n)

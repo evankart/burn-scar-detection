@@ -12,33 +12,15 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
+from src.utils import get_device
+
 logger = logging.getLogger(__name__)
 
 
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
 class CETverskyLoss(nn.Module):
-    """Weighted cross-entropy + soft Tversky on the burn class.
-
-    CE supervises per-pixel classification; Tversky directly optimizes region
-    overlap (like Dice) but adds an asymmetric penalty knob that controls the
-    precision/recall tradeoff — the Tversky index is
-
-        TI = TP / (TP + alpha*FP + beta*FN)
-
-    where alpha penalizes false positives and beta penalizes false negatives.
-    alpha == beta == 0.5 recovers the soft Dice loss exactly. Raising alpha
-    above beta penalizes over-prediction (false alarms), trading recall for
-    precision — the lever we use to curb a model that floods burn predictions.
-    Both alpha/beta and class_weights are calibrated on the held-out *training*
-    fires' validation split only, never the test fires, to avoid leakage.
-    """
+    """Weighted CE + soft Tversky on the burn class. alpha penalizes false
+    positives, beta false negatives (alpha=beta=0.5 == Dice). See
+    README."""
 
     def __init__(
         self,
@@ -99,9 +81,6 @@ class Trainer:
         self.backbone_mult = self.tc["backbone_lr_multiplier"]
         self.llrd_decay = self.tc.get("llrd_decay", 1.0)  # 1.0 = no layer-wise decay
 
-        # Build the optimizer over currently-trainable params. If the encoder is
-        # frozen at init it is excluded here and re-added (with layer-wise LR
-        # decay) when it unfreezes — see _build_optimizer / the train loop.
         encoder_trainable = any(p.requires_grad for n, p in self.model.named_parameters() if "encoder" in n)
         self.optimizer = self._build_optimizer(include_encoder=encoder_trainable)
 
@@ -136,13 +115,16 @@ class Trainer:
             logger.info("W&B not available, logging to console only")
 
     def _build_optimizer(self, include_encoder: bool):
-        """AdamW with the decoder at base LR and (optionally) the encoder at a
-        much lower LR with layer-wise decay: shallow Prithvi layers (patch embed,
-        early blocks) get the smallest LR so their general pretrained features are
-        preserved, deeper layers a bit more. llrd_decay=1.0 disables the decay
-        (uniform encoder LR = base_lr * backbone_mult)."""
+        """AdamW: decoder at base LR, encoder at a lower LR with layer-wise decay
+        (llrd_decay=1.0 disables decay). See README."""
         import re
-        N_BLOCKS = 12
+        # Infer encoder depth from named params (12 for 1.0, 24 for 2.0).
+        block_ids = set()
+        for n, _ in self.model.named_parameters():
+            mt = re.search(r"encoder.*blocks\.(\d+)\.", n)
+            if mt:
+                block_ids.add(int(mt.group(1)))
+        N_BLOCKS = max(block_ids) + 1 if block_ids else 12
         top = N_BLOCKS + 1
 
         def layer_of(name: str) -> int:
@@ -165,7 +147,9 @@ class Trainer:
     def train_epoch(self, epoch: int) -> dict:
         self.model.train()
         total_loss = 0.0
-        all_preds, all_labels = [], []
+        # Accumulate confusion-matrix counts instead of storing all predictions,
+        # so memory stays O(1) rather than O(dataset_size).
+        tp = fp = fn = tn = 0
 
         for batch_idx, batch in enumerate(self.dataloaders["train"]):
             images = batch["pixel_values"].to(self.device)
@@ -179,24 +163,36 @@ class Trainer:
             self.optimizer.step()
 
             total_loss += loss.item()
-            preds = logits.argmax(dim=1).cpu().numpy()
-            all_preds.append(preds)
-            all_labels.append(labels.cpu().numpy())
+            with torch.no_grad():
+                preds = logits.argmax(dim=1)
+                tp += ((preds == 1) & (labels == 1)).sum().item()
+                fp += ((preds == 1) & (labels == 0)).sum().item()
+                fn += ((preds == 0) & (labels == 1)).sum().item()
+                tn += ((preds == 0) & (labels == 0)).sum().item()
 
             if batch_idx % self.config["logging"]["log_every_n_steps"] == 0:
                 logger.info(f"Epoch {epoch} [{batch_idx}/{len(self.dataloaders['train'])}] loss={loss.item():.4f}")
 
-        all_preds = np.concatenate(all_preds)
-        all_labels = np.concatenate(all_labels)
-        metrics = compute_metrics(all_preds, all_labels, num_classes=self.model.num_classes)
-        metrics["loss"] = total_loss / len(self.dataloaders["train"])
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        total     = tp + fp + fn + tn
+        iou_burn  = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else float("nan")
+        iou_bg    = tn / (tn + fp + fn) if (tn + fp + fn) > 0 else float("nan")
+        metrics = {
+            "loss": total_loss / len(self.dataloaders["train"]),
+            "pixel_accuracy": (tp + tn) / total if total > 0 else 0.0,
+            "mean_iou": float(np.nanmean([iou_burn, iou_bg])),
+            "iou_burn_scar": float(iou_burn),
+            "f1_burn_scar": f1,
+        }
         return metrics
 
     @torch.no_grad()
     def validate(self) -> dict:
         self.model.eval()
         total_loss = 0.0
-        all_preds, all_labels = [], []
+        tp = fp = fn = tn = 0
 
         for batch in self.dataloaders["val"]:
             images = batch["pixel_values"].to(self.device)
@@ -205,14 +201,25 @@ class Trainer:
             loss = self.criterion(logits, labels)
 
             total_loss += loss.item()
-            all_preds.append(logits.argmax(dim=1).cpu().numpy())
-            all_labels.append(labels.cpu().numpy())
+            preds = logits.argmax(dim=1)
+            tp += ((preds == 1) & (labels == 1)).sum().item()
+            fp += ((preds == 1) & (labels == 0)).sum().item()
+            fn += ((preds == 0) & (labels == 1)).sum().item()
+            tn += ((preds == 0) & (labels == 0)).sum().item()
 
-        all_preds = np.concatenate(all_preds)
-        all_labels = np.concatenate(all_labels)
-        metrics = compute_metrics(all_preds, all_labels, num_classes=self.model.num_classes)
-        metrics["loss"] = total_loss / len(self.dataloaders["val"])
-        return metrics
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        total     = tp + fp + fn + tn
+        iou_burn  = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else float("nan")
+        iou_bg    = tn / (tn + fp + fn) if (tn + fp + fn) > 0 else float("nan")
+        return {
+            "loss": total_loss / len(self.dataloaders["val"]),
+            "pixel_accuracy": (tp + tn) / total if total > 0 else 0.0,
+            "mean_iou": float(np.nanmean([iou_burn, iou_bg])),
+            "iou_burn_scar": float(iou_burn),
+            "f1_burn_scar": f1,
+        }
 
     def train(self) -> dict:
         logger.info(f"Training on {self.device} for {self.tc['epochs']} epochs")
@@ -226,10 +233,6 @@ class Trainer:
                 and hasattr(self.model, "unfreeze_backbone")
             ):
                 self.model.unfreeze_backbone()
-                # The encoder was excluded from the optimizer while frozen; rebuild
-                # it (with layer-wise LR decay) so the now-trainable encoder params
-                # are actually optimized, then give the run a fresh cosine schedule
-                # over the remaining epochs.
                 self.optimizer = self._build_optimizer(include_encoder=True)
                 remaining = max(1, self.tc["epochs"] - epoch + 1)
                 self.scheduler = CosineAnnealingLR(self.optimizer, T_max=remaining)
