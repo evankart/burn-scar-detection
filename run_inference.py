@@ -48,10 +48,10 @@ def run_inference(
     valid_px = ~(np.isnan(image).any(axis=0) | (np.nan_to_num(image).max(axis=0) == 0))
 
     # Pre-inference cloud/water exclusion — applied before the model sees any pixels.
-    # Prevents cloud and water pixels from accumulating burn probability scores.
+    # Fmask cloud flag (bit 2) is intentionally excluded here: it triggers on smoke/haze
+    # over burned land (observed: Thomas fire recall 0.73 → 0.26 when included).
+    # water_mask + cloud_over_water_mask are sufficient to prevent ocean/fog false positives.
     pre_cloud = water_mask(post_ds, threshold=water_ndwi_threshold) | cloud_over_water_mask(post_ds)
-    if "Fmask" in post_ds:
-        pre_cloud |= (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS) != 0
     valid_px &= ~pre_cloud
 
     stride = patch_size // 2
