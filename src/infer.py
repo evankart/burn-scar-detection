@@ -212,17 +212,12 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if pred_threshold is None:
         pred_threshold = cfg["data"].get("pred_threshold", 0.5)
 
-    _fmask_raw = None
     if prefetched is not None:
         image = prefetched["image"]
         post_ds = prefetched["post_ds"]
         scene_date = prefetched["scene_date"]
         n_scenes = prefetched["n_scenes"]
         bounds = prefetched["bounds"]
-        # Use Fmask saved in the cached dataset if available (new-format .nc files).
-        if "Fmask" in post_ds:
-            from src.data import FMASK_BAD_BITS
-            _fmask_raw = (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS).astype(np.uint8)
     else:
         dl = HLSDownloader(config_path=_CONFIG)
         end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
@@ -235,7 +230,6 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
         image = normalize_bands(post_ds, bands)
         bounds = _bounds_latlon(post_ds)
-        _fmask_raw = dl.load_fmask(granules[0], tuple(bbox))
 
     _, h, w = image.shape
 
@@ -243,18 +237,10 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     # Prevents cloud and water pixels from accumulating burn probability scores —
     # post-inference zeroing still lets the model score those pixels first, leaving
     # residual probability artefacts at cloud/water edges.
+    # Fmask cloud flag (bit 2) intentionally excluded: triggers on smoke/haze over
+    # burned land and zeros out valid burn pixels pre-inference.
     ndwi_thresh = cfg["data"].get("water_ndwi_threshold", 0.0)
     pre_cloud = water_mask(post_ds, threshold=ndwi_thresh) | cloud_over_water_mask(post_ds)
-    if _fmask_raw is not None:
-        from src.data import FMASK_BAD_BITS
-        fmask = _fmask_raw
-        if fmask.shape != (h, w):
-            from PIL import Image as _PIL
-            fmask = np.array(_PIL.fromarray(fmask).resize((w, h), _PIL.NEAREST))
-        pre_cloud |= (fmask.astype(np.uint8) & FMASK_BAD_BITS) != 0
-    elif "Fmask" in post_ds:
-        from src.data import FMASK_BAD_BITS
-        pre_cloud |= (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS) != 0
 
     pad_h, pad_w = max(0, patch_size - h), max(0, patch_size - w)
     if pad_h or pad_w:
