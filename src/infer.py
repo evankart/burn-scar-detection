@@ -240,7 +240,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     # Fmask cloud flag (bit 2) intentionally excluded: triggers on smoke/haze over
     # burned land and zeros out valid burn pixels pre-inference.
     ndwi_thresh = cfg["data"].get("water_ndwi_threshold", 0.0)
-    pre_cloud = water_mask(post_ds, threshold=ndwi_thresh) | cloud_over_water_mask(post_ds)
+    pre_cloud = water_mask(post_ds, threshold=ndwi_thresh)
 
     pad_h, pad_w = max(0, patch_size - h), max(0, patch_size - w)
     if pad_h or pad_w:

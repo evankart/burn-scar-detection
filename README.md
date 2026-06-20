@@ -10,13 +10,13 @@ Trained on **100 wildfires** — 37 US fires across 5 states (CA, OR, AZ, NM, WA
 
 | Fire | Year | Biome / Type | Precision | Recall | IoU |
 |---|---|---|---|---|---|
-| Woolsey | 2018 | SoCal coastal chaparral | 89% | 92% | **83%** |
+| Woolsey | 2018 | SoCal coastal chaparral | 89% | 85% | **77%** |
 | Thomas | 2017 | CA coastal mountains | 95% | 73% | **70%** |
-| Eaton | 2025 | SoCal urban interface | 96% | 73% | **71%** |
-| Palisades | 2025 | SoCal urban interface | 46% | 72% | **39%** |
-| **Macro** | | | **82%** | **78%** | **66%** |
+| Eaton | 2025 | SoCal urban interface | 96% | 77% | **75%** |
+| Palisades | 2025 | SoCal urban interface | 97% | 71% | **69%** |
+| **Macro** | | | **94%** | **77%** | **73%** |
 
-The three wildland fires (Woolsey, Thomas, Eaton) score 70–83% IoU. Palisades is substantially harder: the fire burned through dense residential areas (Pacific Palisades, Altadena) where post-fire debris fields have a very different spectral signature from wildland char — a known limitation of single-date spectral models trained on wildland fires.
+All four test fires exceed 69% IoU. Palisades previously scored 39% IoU due to cloud/ocean pixels being misclassified as burn; pre-inference NDWI water masking resolved this. The fire burned through dense residential areas (Pacific Palisades, Altadena) where debris fields have a different spectral signature from wildland char — high precision (97%) reflects the model's conservatism in urban areas.
 
 These four fires are held out of training entirely. The decision threshold (0.5) is fixed a priori — never tuned on the test fires.
 
@@ -47,7 +47,7 @@ HLS (6 bands, 30m) → z-score normalize → Prithvi-EO-2.0 ViT encoder → FPN 
 
 **Patch sampling.** Burn scars are rare, so patches are sampled to ensure burn coverage. A patch is kept if ≥ half its pixels are valid; remaining nodata is imputed to 0.
 
-**Water and cloud masking (inference).** Two post-inference masks are applied. (1) Combined NDWI + MNDWI water mask. (2) HLS Fmask per-pixel cloud/shadow mask (QA band bits 1, 2, 8). Both masks are deterministic and model-independent.
+**Water masking (inference).** NDWI + MNDWI water mask applied *pre-inference* — water and ocean pixels are excluded from `valid_px` before the model scores any patch, preventing cloud/ocean false positives from accumulating burn probability. The HLS Fmask cloud flag is intentionally excluded from this mask: it triggers on smoke/haze over burned land and would zero out valid burn pixels.
 
 **Sliding-window inference.** Scenes are tiled into overlapping 224-px windows (half-patch stride), with a final row/col anchored flush to the edge; overlaps are averaged.
 

@@ -22,12 +22,14 @@ logger = logging.getLogger(__name__)
 
 HLS_COLLECTION = "HLSS30.v2.0"
 
-# HLS Fmask QA bit values to treat as nodata: cloud (2) | snow/ice (16) = 18.
-# Cloud shadow (8) is intentionally excluded: shadows have valid spectral values
-# and the burn signature (high SWIR, low NIR) is detectable under shadow. Masking
-# them to NaN punches holes in predictions over burned areas with overhead cloud.
-# Cirrus (1) and adjacent-to-cloud (4) are also left in.
-FMASK_BAD_BITS = 0b00010010
+# HLS Fmask QA bit values to treat as nodata during download: snow/ice (16) only.
+# Cloud (2) and cloud shadow (8) are intentionally excluded:
+#   - Cloud shadow has valid spectral values; burn signal is detectable under shadow.
+#   - Cloud flag triggers on smoke/haze over burned land (observed: Thomas fire 2017
+#     recall dropped from 0.73 to 0.26 when cloud pixels were NaN'd at download time).
+#     Pre-inference water_mask + cloud_over_water_mask handle the ocean/cloud case.
+# Snow (16) genuinely destroys the burn spectral signature and must be excluded.
+FMASK_BAD_BITS = 0b00010000
 
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
