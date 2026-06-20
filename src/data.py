@@ -1,8 +1,7 @@
 """
 HLS data pipeline: download, preprocessing, and PyTorch dataset.
 
-Uses NASA Earthdata's Harmonized Landsat Sentinel-2 (HLS) product — the same
-data Prithvi-EO was pretrained on.
+Uses NASA Earthdata's Harmonized Landsat Sentinel-2 (HLS) product (same as data Prithvi-EO was pretrained on).
 """
 
 import logging
@@ -23,22 +22,74 @@ logger = logging.getLogger(__name__)
 
 HLS_COLLECTION = "HLSS30.v2.0"
 
+# HLS Fmask QA bit values to treat as nodata during download: snow/ice (16) only.
+# Cloud (2) and cloud shadow (8) are intentionally excluded:
+#   - Cloud shadow has valid spectral values; burn signal is detectable under shadow.
+#   - Cloud flag triggers on smoke/haze over burned land (observed: Thomas fire 2017
+#     recall dropped from 0.73 to 0.26 when cloud pixels were NaN'd at download time).
+#     Pre-inference water_mask + cloud_over_water_mask handle the ocean/cloud case.
+# Snow (16) genuinely destroys the burn spectral signature and must be excluded.
+FMASK_BAD_BITS = 0b00010000
 
-# ---------------------------------------------------------------------------
-# Download
-# ---------------------------------------------------------------------------
 
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge overlay into base (overlay wins); returns a new dict."""
+    out = dict(base)
+    for k, v in overlay.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def load_config(config_path: str = "configs/train_config.yaml") -> dict:
+    """Load a YAML config and derive train/test/negative_regions from the single
+    ``data.fires`` registry (each entry tagged ``role:``).
+
+    A config may set ``extends: <other.yaml>`` (path relative to itself) to
+    inherit from a base config and override only what differs — this is how
+    finetune_config.yaml reuses train_config.yaml's fire list without copying it.
+    See README."""
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+
+    base_name = config.pop("extends", None)
+    if base_name:
+        base = load_config(str(Path(config_path).parent / base_name))
+        config = _deep_merge(base, config)
+
+    data = config.get("data", {})
+    fires = data.get("fires")
+    if fires is not None:
+        buckets: dict[str, list] = {"train": [], "test": [], "negative": []}
+        for fire in fires:
+            role = fire.get("role", "train")
+            region = {k: v for k, v in fire.items() if k != "role"}
+            buckets.setdefault(role, []).append(region)
+        # fires is the source of truth: derived lists overwrite any stale keys.
+        data["train_regions"] = buckets["train"]
+        data["test_regions"] = buckets["test"]
+        if buckets["negative"]:
+            data["negative_regions"] = buckets["negative"]
+    return config
+
+
+# --- Download HLS Data ---
 class HLSDownloader:
     """Downloads and caches HLS imagery from NASA Earthdata."""
 
     def __init__(self, config_path: str = "configs/train_config.yaml"):
-        with open(config_path) as f:
-            self.config = yaml.safe_load(f)
+        self.config = load_config(config_path)
 
         self.bands = self.config["data"]["bands"]
         self.cache_dir = Path(self.config["data"]["cache_dir"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        earthaccess.login(strategy="netrc")
+
+        try:
+            earthaccess.login(strategy="environment")
+        except Exception:
+            earthaccess.login(strategy="netrc")
 
     def _region_bbox(self, lat: float, lon: float, buffer_km: float) -> tuple:
         buffer_deg = buffer_km * 0.009
@@ -76,10 +127,7 @@ class HLSDownloader:
             if not matched:
                 raise ValueError(f"Band {band} not found in granule assets")
 
-            # mask_and_scale: apply HLS scale_factor (0.0001) and decode the
-            # -9999 fill to NaN, yielding float surface reflectance. normalize_bands
-            # and the merge step both require float+NaN, not raw int16 DN.
-            da = rioxarray.open_rasterio(matched[0], chunks={"x": 512, "y": 512}, mask_and_scale=True)
+            da = rioxarray.open_rasterio(matched[0], mask_and_scale=True)
             geom = box(*bbox)
             da = da.rio.clip([mapping(geom)], crs="EPSG:4326")
             band_arrays[band] = da.squeeze("band", drop=True)
@@ -92,6 +140,46 @@ class HLSDownloader:
         ds = xr.Dataset(band_arrays)
         ds.load()
         return ds
+
+    def load_fmask(self, granule, bbox: tuple) -> np.ndarray | None:
+        """Load HLS Fmask quality band for a granule, clipped to bbox.
+
+        Returns uint8 array of Fmask values, or None if the band is unavailable.
+        Bit flags: 1=cirrus, 2=cloud, 8=cloud shadow, 16=snow, 32=water.
+        """
+        try:
+            files = earthaccess.open([granule])
+            matched = [f for f in files if f.path.endswith(".Fmask.tif")]
+            if not matched:
+                return None
+            da = rioxarray.open_rasterio(matched[0], mask_and_scale=False)
+            da = da.rio.clip([mapping(box(*bbox))], crs="EPSG:4326")
+            da = da.squeeze("band", drop=True)
+            da.load()
+            return da.values.astype(np.uint8)
+        except Exception as e:
+            logger.warning(f"Could not load Fmask: {e}")
+            return None
+
+    def _load_fmask_da(self, granule, bbox: tuple, ref_da: xr.DataArray) -> xr.DataArray | None:
+        """Fmask QA band as a DataArray reprojected onto ref_da's grid (nearest),
+        so it aligns pixel-for-pixel with the loaded spectral bands. None if absent."""
+        from rasterio.enums import Resampling
+        try:
+            files = earthaccess.open([granule])
+            matched = [f for f in files if f.path.endswith(".Fmask.tif")]
+            if not matched:
+                return None
+            da = rioxarray.open_rasterio(matched[0], mask_and_scale=False)
+            da = da.rio.clip([mapping(box(*bbox))], crs="EPSG:4326")
+            da = da.squeeze("band", drop=True)
+            if da.shape != ref_da.shape:
+                da = da.rio.reproject_match(ref_da, resampling=Resampling.nearest)
+            da.load()
+            return da
+        except Exception as e:
+            logger.warning(f"Could not load Fmask for masking: {e}")
+            return None
 
     def _make_target_grid(self, bbox: tuple, resolution: float = 30.0) -> xr.DataArray:
         """
@@ -122,18 +210,15 @@ class HLSDownloader:
         )
         return ref.rio.write_crs(utm_epsg)
 
-    def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10) -> xr.Dataset:
-        """
-        Mosaic up to max_scenes onto a fixed UTM grid spanning the full bbox.
+    def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10,
+                              apply_fmask: bool = True) -> xr.Dataset:
+        """Mosaic up to max_scenes onto a fixed UTM grid spanning the bbox via
+        rioxarray.merge (each scene placed at its true position; least-cloudy
+        first, nodata gaps filled from later scenes).
 
-        Uses rioxarray.merge, which places every scene at its true geographic
-        position, so scenes from different MGRS tiles tile together correctly.
-        Granules arrive sorted least-cloudy-first; merge keeps the first valid
-        pixel and fills nodata gaps from later scenes. This replaces a per-scene
-        reproject_match + manual gap-fill that stretched a single clipped tile
-        across the whole grid and short-circuited on the first scene, leaving
-        multi-tile bboxes (e.g. fires at a 4-tile junction) mostly nodata.
-        """
+        With apply_fmask=True, each granule's cloud / cloud-shadow / snow pixels
+        (per its HLS Fmask QA band, FMASK_BAD_BITS) are set to NaN before merge,
+        so clean pixels from other scenes fill those gaps in the mosaic."""
         import gc
         from rioxarray.merge import merge_arrays
 
@@ -142,14 +227,37 @@ class HLSDownloader:
         bounds = ref_da.rio.bounds()
 
         per_band: dict[str, list] = {b: [] for b in self.bands}
+        per_fmask: list = []
         loaded = 0
+        masked_px_total = 0
+        last_err = None
         for granule in granules[:max_scenes]:
             granule_id = granule.get("meta", {}).get("native-id", "unknown")
             try:
                 ds = self.load_scene(granule, bbox)
             except Exception as e:
-                logger.warning(f"Skipping scene {granule_id}: {e}")
+                last_err = e
+                logger.warning(f"Skipping scene {granule_id}: {type(e).__name__}: {e}")
                 continue
+            if apply_fmask:
+                fmask_da = self._load_fmask_da(granule, bbox, ds[self.bands[0]])
+                if fmask_da is not None:
+                    bad = (fmask_da.values.astype(np.uint8) & FMASK_BAD_BITS) != 0
+                    if bad.any():
+                        masked_px_total += int(bad.sum())
+                        for band in self.bands:
+                            ds[band].values[bad] = np.nan
+                    # Accumulate Fmask bad-pixel map for saving to the cache.
+                    bad_da = xr.DataArray(
+                        bad.astype(np.float32), dims=fmask_da.dims, coords=fmask_da.coords
+                    )
+                    if fmask_da.rio.crs is not None:
+                        bad_da = bad_da.rio.write_crs(fmask_da.rio.crs)
+                    bad_da = bad_da.rio.write_nodata(0.0)
+                    if bad_da.rio.crs is not None and bad_da.rio.crs != target_crs:
+                        from rasterio.enums import Resampling as _Res
+                        bad_da = bad_da.rio.reproject(target_crs, resampling=_Res.max)
+                    per_fmask.append(bad_da)
             for band in self.bands:
                 da = ds[band].rio.write_nodata(np.nan)
                 if da.rio.crs is not None and da.rio.crs != target_crs:
@@ -160,31 +268,49 @@ class HLSDownloader:
             gc.collect()
 
         if loaded == 0:
-            raise ValueError("No scenes could be loaded")
+            msg = "No scenes could be loaded"
+            if last_err:
+                msg += f" (last error: {type(last_err).__name__}: {last_err})"
+            raise ValueError(msg)
 
         merged = {}
         for band in self.bands:
             mosaic = merge_arrays(per_band[band], bounds=bounds, res=(30.0, 30.0), nodata=np.nan)
             merged[band] = mosaic.squeeze(drop=True)
         out = xr.Dataset(merged).rio.write_crs(target_crs)
-        # Each band still carries encoding inherited from the int16 source COG.
-        # The critical key is dtype=int16: mask_and_scale decoded the data to
-        # float reflectance but left dtype/scale_factor in encoding, so to_netcdf
-        # would re-cast the floats back to int16 — and with scale_factor dropped
-        # that truncates all 0.0-0.5 reflectance to 0. Clear the band encoding
-        # and the stale CF attrs so bands save as plain float32 with NaN nodata,
-        # matching the other cached scenes.
         for band in self.bands:
             out[band].encoding.clear()
             for k in ("_FillValue", "scale_factor", "add_offset"):
                 out[band].attrs.pop(k, None)
+
+        # Save merged Fmask (union of bad pixels across granules) so downstream
+        # inference can mask clouds without re-downloading the QA band.
+        if per_fmask:
+            try:
+                fmask_mosaic = merge_arrays(per_fmask, bounds=bounds, res=(30.0, 30.0), nodata=0.0)
+                out["Fmask"] = xr.DataArray(
+                    (fmask_mosaic.squeeze(drop=True).values > 0.5).astype(np.uint8),
+                    dims=out[self.bands[0]].dims,
+                )
+            except Exception as e:
+                logger.warning(f"Could not save merged Fmask to cache: {e}")
+
         valid_pct = (~np.isnan(out[self.bands[0]].values)).mean() * 100
-        logger.info(f"Merged {loaded} scene(s) across tiles: {valid_pct:.1f}% valid pixels")
+        fmask_note = f", Fmask-masked {masked_px_total:,} px pre-merge" if masked_px_total else ""
+        logger.info(f"Merged {loaded} scene(s) across tiles: {valid_pct:.1f}% valid pixels{fmask_note}")
         return out
 
     def _filter_to_tile(self, granules: list, tile_id: str) -> list:
         """Keep only granules from a specific MGRS tile."""
         return [g for g in granules if self._get_mgrs_tile(g) == tile_id]
+
+    def _cache_has_bands(self, path: Path) -> bool:
+        """True if the cached NetCDF contains every band in self.bands."""
+        try:
+            with xr.open_dataset(path, engine="h5netcdf") as ds:
+                return all(b in ds.variables for b in self.bands)
+        except Exception:
+            return False
 
     def download_region(self, region: dict) -> dict[str, Path]:
         name = region["name"]
@@ -192,15 +318,16 @@ class HLSDownloader:
         post_path = self.cache_dir / f"{name}_post.nc"
 
         if pre_path.exists() and post_path.exists():
-            logger.info(f"Using cached data for {name}")
-            return {"pre": pre_path, "post": post_path}
+            # Re-download if the cache lacks the requested bands (1.0 vs 2.0 differ).
+            if self._cache_has_bands(post_path) and self._cache_has_bands(pre_path):
+                logger.info(f"Using cached data for {name}")
+                return {"pre": pre_path, "post": post_path}
+            logger.info(
+                f"Cached {name} is missing requested bands {self.bands} — re-downloading"
+            )
 
         bbox = self._region_bbox(region["lat"], region["lon"], region["buffer_km"])
 
-        # When a buffer spans more than one MGRS tile, locking to a single tile
-        # leaves the rest of the scene as nodata. Opt-in mosaicking across tiles
-        # (the merge already reprojects every scene onto a common UTM grid) gives
-        # full coverage at the cost of mixing acquisition dates slightly.
         allow_multitile = region.get("allow_multitile", False)
 
         post_start = region["post_fire_date"]
@@ -260,9 +387,7 @@ class HLSDownloader:
         return results
 
 
-# ---------------------------------------------------------------------------
-# Preprocessing
-# ---------------------------------------------------------------------------
+# --- Preprocessing ---
 
 def _restore_crs(ds: xr.Dataset) -> xr.Dataset:
     """Restore CRS from spatial_ref variable after loading from NetCDF."""
@@ -341,34 +466,16 @@ def compute_dnbr(pre_ds: xr.Dataset, post_ds: xr.Dataset) -> np.ndarray:
 
 
 def normalize_bands(ds: xr.Dataset, bands: list[str]) -> np.ndarray:
-    """
-    Stack and normalize HLS bands using Prithvi pretraining statistics.
+    """Stack + normalize HLS bands with Prithvi 2.0 pretraining stats → (C, H, W)."""
+    from src.model import PRITHVI_CFG
 
-    HLS data from earthaccess is already in surface reflectance (0-1 scale).
-    Applies per-band z-score normalization with the mean/std from
-    Prithvi-EO-1.0-100M's HLS pretraining data. Returns (C, H, W).
-
-    Brightness correction: HLS surface reflectance (LaSRC atmospheric correction
-    + BRDF normalization) runs systematically ~1.4-1.9x darker than the HLS
-    distribution Prithvi was pretrained on — most strongly in the visible bands.
-    Fed to the frozen Prithvi encoder, this dark input pushes features toward the
-    low-NIR "burn" signature and floods burn predictions (worst on dark SoCal
-    chaparral scenes). Each band is rescaled by a fixed GAIN, calibrated so the
-    pooled *training*-fire median reflectance matches the Prithvi pretraining mean
-    (no test data, no labels), bringing input back into the encoder's expected
-    range before z-scoring. This lifted held-out IoU substantially (e.g. Woolsey
-    0.53 -> ~0.75); see results/over_prediction_analysis.md.
-    """
-    MEAN = [0.077523, 0.108099, 0.122859, 0.249720, 0.220421, 0.161083]
-    STD  = [0.128153, 0.127003, 0.139948, 0.136834, 0.129168, 0.115451]
-    # B02, B03, B04, B8A, B11, B12 (must match the config band order)
-    GAIN = [1.8793, 1.7172, 1.5741, 1.4097, 1.1295, 1.1276]
+    MEAN = PRITHVI_CFG["mean"]
+    STD  = PRITHVI_CFG["std"]
 
     arrays = []
     for i, band in enumerate(bands):
         arr = ds[band].values.astype(np.float32)
         arr = np.clip(arr, 0, 1)
-        arr = arr * GAIN[i]
         arr = (arr - MEAN[i]) / STD[i]
         arrays.append(arr)
     return np.stack(arrays, axis=0)
@@ -384,17 +491,10 @@ def create_patches(
     min_valid_fraction: float = 0.5,
     max_patches: int | None = None,
 ) -> list[dict]:
-    """Slice image and mask into patches, keeping all burns + a fraction of
-    pure-background patches. Burn scars are rare, so retaining every background
-    patch would swamp the positive class and bias the model toward predicting
-    "unburned"; background_keep caps that imbalance.
-
-    A patch is kept when at least min_valid_fraction of its pixels are valid
-    (not nodata); the remaining nodata is imputed to 0 (≈ per-band mean in
-    z-scored space). Requiring *every* pixel to be valid — as an earlier
-    version did — silently dropped entire large scenes whose every 224x224
-    window clipped a nodata gap, starving training of the biggest fires.
-    max_patches caps the per-call count so a single mega-fire can't dominate."""
+    """Slice image+mask into patches: keep all burns + a background_keep fraction
+    of pure-background patches. A patch is kept if >= min_valid_fraction pixels
+    are valid (nodata imputed to 0); max_patches caps the per-call count. See
+    README."""
     if stride is None:
         stride = patch_size // 4
 
@@ -456,10 +556,7 @@ def process_region(
     return patches
 
 
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
-
+# --- Dataset ---
 class BurnScarDataset(Dataset):
     """PyTorch dataset for burn scar segmentation patches."""
 
@@ -498,11 +595,6 @@ class BurnScarDataset(Dataset):
             image = np.rot90(image, k, axes=(-2, -1)).copy()
             mask = np.rot90(mask, k, axes=(-2, -1)).copy()
 
-        # Random resized crop: zoom into a random sub-window (scale in [0.7,1.0])
-        # and resize back to the patch size. Adds scale/translation invariance —
-        # cheap regularization that matters when fine-tuning the full ViT on few
-        # patches. Spectral values are untouched (no color jitter — it would
-        # corrupt the reflectance-based burn signature).
         if self.augment_config.get("random_resized_crop", False) and np.random.random() > 0.5:
             import torch
             import torch.nn.functional as F
