@@ -51,7 +51,7 @@ def run_inference(
     # Fmask cloud flag (bit 2) is intentionally excluded here: it triggers on smoke/haze
     # over burned land (observed: Thomas fire recall 0.73 → 0.26 when included).
     # water_mask + cloud_over_water_mask are sufficient to prevent ocean/fog false positives.
-    pre_cloud = water_mask(post_ds, threshold=water_ndwi_threshold) | cloud_over_water_mask(post_ds)
+    pre_cloud = water_mask(post_ds, threshold=water_ndwi_threshold)
     valid_px &= ~pre_cloud
 
     stride = patch_size // 2
@@ -145,8 +145,21 @@ def main():
         pre_path = Path(config["data"]["cache_dir"]) / f"{name}_pre.nc"
         post_path = Path(config["data"]["cache_dir"]) / f"{name}_post.nc"
 
+        for path in (pre_path, post_path):
+            if not path.exists():
+                import subprocess
+                s3_key = f"s3://burn-scar-detection/hls-cache/{path.name}"
+                logger.info(f"{path.name} not cached — pulling from {s3_key}")
+                r = subprocess.run(
+                    ["aws", "s3", "cp", s3_key, str(path), "--region", "us-west-2"],
+                    capture_output=True,
+                )
+                if r.returncode != 0:
+                    logger.warning(f"Data not found for {name} locally or on S3. Run download first.")
+                    break
+        else:
+            pass  # both paths exist, continue below
         if not pre_path.exists() or not post_path.exists():
-            logger.warning(f"Data not found for {name}. Run download first.")
             continue
 
         logger.info(f"Running inference on {name}...")

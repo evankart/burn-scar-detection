@@ -47,6 +47,7 @@ data:
     buffer_km: 45
     pre_fire_date: '2017-09-01'
     post_fire_date: '2018-01-15'
+    allow_multitile: true
   - name: august_complex_2020
     role: train
     lat: 40.0

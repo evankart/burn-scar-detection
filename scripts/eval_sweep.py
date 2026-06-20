@@ -32,7 +32,12 @@ def main():
     ap.add_argument("--checkpoints", nargs="+", required=True)
     ap.add_argument("--config", default="configs/train_config.yaml")
     ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument("--fires", nargs="+", default=None, help="Subset of test fires to evaluate")
     args = ap.parse_args()
+
+    global TEST_FIRES
+    if args.fires:
+        TEST_FIRES = args.fires
 
     cfg = load_config(args.config)
     bands = cfg["data"]["bands"]
@@ -41,11 +46,28 @@ def main():
     cache = cfg["data"]["cache_dir"]
     device = get_device()
 
-    # Pre-load test scenes once
+    # Pre-load test scenes — pull from S3 if not cached locally.
+    S3_CACHE = "s3://burn-scar-detection/hls-cache"
     scenes = {}
     for name in TEST_FIRES:
-        pre = _restore_crs(xr.open_dataset(f"{cache}/{name}_pre.nc", engine="h5netcdf"))
-        post = _restore_crs(xr.open_dataset(f"{cache}/{name}_post.nc", engine="h5netcdf"))
+        pre_path = Path(f"{cache}/{name}_pre.nc")
+        post_path = Path(f"{cache}/{name}_post.nc")
+        for path in (pre_path, post_path):
+            if not path.exists():
+                import subprocess
+                s3_key = f"{S3_CACHE}/{path.name}"
+                print(f"  {path.name} not cached — pulling from {s3_key}", flush=True)
+                r = subprocess.run(
+                    ["aws", "s3", "cp", s3_key, str(path), "--region", "us-west-2"],
+                    capture_output=True,
+                )
+                if r.returncode != 0:
+                    raise FileNotFoundError(
+                        f"{path} not found locally or on S3. "
+                        f"Run: python run_training.py --config {args.config} --download-only"
+                    )
+        pre = _restore_crs(xr.open_dataset(pre_path, engine="h5netcdf"))
+        post = _restore_crs(xr.open_dataset(post_path, engine="h5netcdf"))
         post = post.rio.reproject_match(pre)
         scenes[name] = (pre, post)
 
