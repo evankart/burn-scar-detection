@@ -36,12 +36,17 @@ def water_mask(
     MNDWI = (green - SWIR1) / (green + SWIR1) catches open ocean and coastal
     water that NDWI misses when haze depresses NIR toward zero.
     A pixel is masked if either index exceeds threshold.
+    Both bands are optional — falls back to zeros if unavailable (e.g. RGB-only
+    prefetch scene where only B02/B03/B04 are downloaded).
     """
     green = ds[green_band].values.astype(np.float32)
-    nir = ds[nir_band].values.astype(np.float32)
-    ndwi = (green - nir) / (green + nir + 1e-8)
 
-    mndwi = np.zeros_like(ndwi)
+    ndwi = np.zeros_like(green)
+    if nir_band in ds:
+        nir = ds[nir_band].values.astype(np.float32)
+        ndwi = (green - nir) / (green + nir + 1e-8)
+
+    mndwi = np.zeros_like(green)
     if swir_band in ds:
         swir = ds[swir_band].values.astype(np.float32)
         mndwi = (green - swir) / (green + swir + 1e-8)
