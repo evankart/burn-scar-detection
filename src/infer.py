@@ -219,6 +219,10 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         scene_date = prefetched["scene_date"]
         n_scenes = prefetched["n_scenes"]
         bounds = prefetched["bounds"]
+        # Use Fmask saved in the cached dataset if available (new-format .nc files).
+        if "Fmask" in post_ds:
+            from src.data import FMASK_BAD_BITS
+            _fmask_raw = (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS).astype(np.uint8)
     else:
         dl = HLSDownloader(config_path=_CONFIG)
         end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
