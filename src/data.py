@@ -22,10 +22,12 @@ logger = logging.getLogger(__name__)
 
 HLS_COLLECTION = "HLSS30.v2.0"
 
-# HLS Fmask QA bit values to treat as nodata: cloud (2) | cloud shadow (8) |
-# snow/ice (16) = 26. Masked per-granule before mosaicking so clean pixels from
-# other scenes fill the gaps. Cirrus (1) and adjacent-to-cloud (4) are left in.
-FMASK_BAD_BITS = 0b00011010
+# HLS Fmask QA bit values to treat as nodata: cloud (2) | snow/ice (16) = 18.
+# Cloud shadow (8) is intentionally excluded: shadows have valid spectral values
+# and the burn signature (high SWIR, low NIR) is detectable under shadow. Masking
+# them to NaN punches holes in predictions over burned areas with overhead cloud.
+# Cirrus (1) and adjacent-to-cloud (4) are also left in.
+FMASK_BAD_BITS = 0b00010010
 
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
