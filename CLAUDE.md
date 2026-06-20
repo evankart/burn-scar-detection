@@ -14,9 +14,9 @@ Wildfire burn scar segmentation from HLS (Harmonized Landsat Sentinel-2) imagery
 - **Encoder:** Prithvi-EO-2.0-300M (ViT-Large, embed_dim=1024, depth=24, frozen epochs 1-2 then unfrozen)
 - **Decoder:** FPN, 3.8M trainable params
 - **Bands:** B02, B03, B04, B8A, B11, B12 (HLS Sentinel naming)
-- **Results (finetune_v3, 100 fires, Optuna-tuned HPs):**
-  - Woolsey 0.890/0.922/**0.828** | Thomas 0.947/0.733/**0.704** | Palisades 0.464/0.719/**0.393** | Eaton 0.959/0.730/**0.708** | **Macro IoU 0.658**
-  - Palisades low precision reflects urban interface spectral signature — known limitation
+- **Results (finetune_v3, 100 fires, Optuna-tuned HPs, fixed inference masking):**
+  - Woolsey 0.890/0.850/**0.769** | Thomas 0.947/0.729/**0.700** | Palisades 0.969/0.710/**0.694** | Eaton 0.958/0.771/**0.746** | **Macro IoU 0.727**
+  - Palisades improved substantially after fixing pre-inference water masking (was 0.393)
 - No brightness gain applied (fine-tuning adapted encoder to HLS distribution)
 
 ## Architecture
@@ -30,7 +30,8 @@ HLS (6 bands, 30m) → normalize_bands → Prithvi-EO-2.0 ViT encoder → FPN de
 
 ## Key design decisions
 - **dNBR threshold: 0.10** — USGS boundary between unburned and low-severity burn (Keeley 2009). Do not change without justification. Low-severity pixels (dNBR 0.10–0.27) are the primary source of label noise.
-- **Cloud cover:** post-fire scenes capped at 20% cloud cover; pre-fire uses progressive fallback (20%/28d → 30%/60d → 40%/90d). Per-pixel Fmask masking (HLS QA band) is not yet implemented — add before global fire expansion.
+- **Cloud cover:** post-fire scenes capped at 20% cloud cover; pre-fire uses progressive fallback (20%/28d → 30%/60d → 40%/90d). Per-pixel Fmask masking implemented in `src/data.py` (`FMASK_BAD_BITS = snow only`; cloud/shadow intentionally excluded from NaN masking to preserve burn signal under haze).
+- **Multi-tile fires:** add `allow_multitile: true` to any fire config whose AOI spans MGRS tile boundaries (e.g. thomas_fire_2017). Without it, the downloader locks to the first tile returned.
 - **No brightness gain for 2.0** — fine-tuning already adapted the encoder to the HLS distribution. The 1.0 gain (`[1.879, 1.717, 1.574, 1.410, 1.130, 1.128]`) is no longer used.
 - **Config inheritance:** `finetune_config.yaml` extends `train_config.yaml` via `extends:` key. All fires live in `train_config.yaml` tagged `role: train|test`. Never duplicate fires across configs.
 - **Frozen encoder forward:** wrapped in `torch.no_grad()` when frozen to save GPU memory. Training loop uses streaming confusion matrix (TP/FP/FN/TN counters) not accumulated predictions — critical for RAM on 16GB instances.
