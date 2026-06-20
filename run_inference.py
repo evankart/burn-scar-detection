@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import xarray as xr
 
-from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs, load_config
+from src.data import normalize_bands, generate_burn_mask, compute_dnbr, _restore_crs, load_config, FMASK_BAD_BITS
 from src.model import BurnScarModel
 from src.utils import get_device, water_mask, cloud_over_water_mask
 
@@ -32,6 +32,7 @@ def run_inference(
     dnbr_threshold: float = 0.10,
     pred_threshold: float = 0.4,
     return_prob: bool = False,
+    water_ndwi_threshold: float = 0.0,
 ) -> tuple[np.ndarray, ...]:
     """Sliding-window inference on a full scene. Returns (pred_mask, true_mask,
     image); with return_prob=True also appends the pre-threshold probability map.
@@ -43,8 +44,15 @@ def run_inference(
     pred_mask = np.zeros((h, w), dtype=np.float32)
     count_mask = np.zeros((h, w), dtype=np.float32)
 
-    # Per-pixel validity (nodata = NaN or all-zero bands); nodata imputed within a window.
+    # Per-pixel validity: nodata (NaN from Fmask-during-download or sensor gaps) excluded.
     valid_px = ~(np.isnan(image).any(axis=0) | (np.nan_to_num(image).max(axis=0) == 0))
+
+    # Pre-inference cloud/water exclusion — applied before the model sees any pixels.
+    # Prevents cloud and water pixels from accumulating burn probability scores.
+    pre_cloud = water_mask(post_ds, threshold=water_ndwi_threshold) | cloud_over_water_mask(post_ds)
+    if "Fmask" in post_ds:
+        pre_cloud |= (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS) != 0
+    valid_px &= ~pre_cloud
 
     stride = patch_size // 2
     model.eval()
@@ -82,10 +90,15 @@ def run_inference(
     trim = ~binary_erosion(valid_px, iterations=2)
     pred_binary[trim] = 0
 
+    # Zero out cloud/water pixels in pred and true masks.
+    pred_binary[pre_cloud] = 0
+    true_mask[pre_cloud] = 0
+
     if return_prob:
         prob = pred_mask.copy()
         prob[trim] = 0.0
         prob[~covered] = 0.0
+        prob[pre_cloud] = 0.0
         return pred_binary, true_mask, image, prob
 
     return pred_binary, true_mask, image
@@ -95,7 +108,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", required=True, help="Region name or 'all'")
     parser.add_argument("--config", default="configs/train_config.yaml")
-    parser.add_argument("--checkpoint", default="checkpoints/finetune_v2/best_model.pt")
+    parser.add_argument("--checkpoint", default="checkpoints/finetune_v3/best_model.pt")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -141,6 +154,7 @@ def main():
         post_ds = _restore_crs(xr.open_dataset(post_path, engine="h5netcdf"))
         post_ds = post_ds.rio.reproject_match(pre_ds)
 
+        ndwi_thresh = config["data"].get("water_ndwi_threshold", 0.0)
         pred_mask, true_mask, image = run_inference(
             model, post_ds, pre_ds,
             bands=config["data"]["bands"],
@@ -148,18 +162,17 @@ def main():
             device=device,
             dnbr_threshold=config["data"].get("dnbr_threshold", 0.10),
             pred_threshold=config["data"].get("pred_threshold", 0.4),
+            water_ndwi_threshold=ndwi_thresh,
         )
 
-        # Continuous dNBR (same grid as true_mask) for the severity overlay.
+        # Continuous dNBR for the severity overlay — also mask water/clouds.
         dnbr = compute_dnbr(pre_ds, post_ds)
-
-        # Water mask (NDWI+MNDWI) + cloud-over-water mask.
-        water = water_mask(post_ds, threshold=config["data"].get("water_ndwi_threshold", 0.0))
+        water = water_mask(post_ds, threshold=ndwi_thresh)
         clouds = cloud_over_water_mask(post_ds)
+        if "Fmask" in post_ds:
+            clouds |= (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS) != 0
         combined = water | clouds
-        if combined.shape == pred_mask.shape:
-            pred_mask[combined] = 0
-            true_mask[combined] = 0
+        if combined.shape == dnbr.shape:
             dnbr[combined] = np.nan
 
         try:

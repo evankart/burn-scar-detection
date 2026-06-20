@@ -223,6 +223,7 @@ class HLSDownloader:
         bounds = ref_da.rio.bounds()
 
         per_band: dict[str, list] = {b: [] for b in self.bands}
+        per_fmask: list = []
         loaded = 0
         masked_px_total = 0
         last_err = None
@@ -242,6 +243,17 @@ class HLSDownloader:
                         masked_px_total += int(bad.sum())
                         for band in self.bands:
                             ds[band].values[bad] = np.nan
+                    # Accumulate Fmask bad-pixel map for saving to the cache.
+                    bad_da = xr.DataArray(
+                        bad.astype(np.float32), dims=fmask_da.dims, coords=fmask_da.coords
+                    )
+                    if fmask_da.rio.crs is not None:
+                        bad_da = bad_da.rio.write_crs(fmask_da.rio.crs)
+                    bad_da = bad_da.rio.write_nodata(0.0)
+                    if bad_da.rio.crs is not None and bad_da.rio.crs != target_crs:
+                        from rasterio.enums import Resampling as _Res
+                        bad_da = bad_da.rio.reproject(target_crs, resampling=_Res.max)
+                    per_fmask.append(bad_da)
             for band in self.bands:
                 da = ds[band].rio.write_nodata(np.nan)
                 if da.rio.crs is not None and da.rio.crs != target_crs:
@@ -266,6 +278,19 @@ class HLSDownloader:
             out[band].encoding.clear()
             for k in ("_FillValue", "scale_factor", "add_offset"):
                 out[band].attrs.pop(k, None)
+
+        # Save merged Fmask (union of bad pixels across granules) so downstream
+        # inference can mask clouds without re-downloading the QA band.
+        if per_fmask:
+            try:
+                fmask_mosaic = merge_arrays(per_fmask, bounds=bounds, res=(30.0, 30.0), nodata=0.0)
+                out["Fmask"] = xr.DataArray(
+                    (fmask_mosaic.squeeze(drop=True).values > 0.5).astype(np.uint8),
+                    dims=out[self.bands[0]].dims,
+                )
+            except Exception as e:
+                logger.warning(f"Could not save merged Fmask to cache: {e}")
+
         valid_pct = (~np.isnan(out[self.bands[0]].values)).mean() * 100
         fmask_note = f", Fmask-masked {masked_px_total:,} px pre-merge" if masked_px_total else ""
         logger.info(f"Merged {loaded} scene(s) across tiles: {valid_pct:.1f}% valid pixels{fmask_note}")
