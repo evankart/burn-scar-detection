@@ -1,0 +1,53 @@
+# Fast Optuna subset: 10 representative train fires + 4 val fires.
+# Hyperparams (LR, loss weights) transfer to the full retrain —
+# tuning on a representative spread is sufficient.
+extends: train_config.yaml
+
+data:
+  fires:
+    # US fires — varied size and severity
+    - {name: north_complex_2020,     role: train}
+    - {name: mendocino_complex_2018, role: train}
+    - {name: bush_2020_az,           role: train}
+    - {name: beachie_creek_2020,     role: train}
+    - {name: monument_2021,          role: train}
+    - {name: pearl_hill_2020,        role: train}
+    # Global fires — biome diversity
+    - {name: gwis_sa_2021_25562853,  role: train}
+    - {name: gwis_au_2019_23651578,  role: train}
+    - {name: gwis_ru_2020_24319087,  role: train}
+    - {name: gwis_af_2019_23541201,  role: train}
+    # Val fires (held out; Optuna tunes against these)
+    - {name: carr_fire_2018,         role: train}
+    - {name: holy_2018,              role: train}
+    - {name: caldor_fire_2021,       role: train}
+    - {name: bootleg_fire_2021,      role: train}
+    # Test fires (never touched)
+    - {name: woolsey_fire_2018,      role: test}
+    - {name: thomas_fire_2017,       role: test}
+    - {name: palisades_fire_2025,    role: test}
+    - {name: eaton_fire_2025,        role: test}
+  val_fires: ["carr_fire_2018", "holy_2018", "caldor_fire_2021", "bootleg_fire_2021"]
+  max_patches_per_region: 300  # cap RAM: 14 fires × 300 ≈ 4200 patches ≈ 5GB
+
+model:
+  freeze_backbone: true
+  unfreeze_after_epoch: 999  # keep frozen throughout Optuna; avoids GPU spike
+
+training:
+  batch_size: 2
+  epochs: 16
+  learning_rate: 3.0e-4
+  backbone_lr_multiplier: 0.05
+  llrd_decay: 0.75
+  weight_decay: 0.05
+  warmup_epochs: 1
+  early_stopping_patience: 5
+  class_weights: [0.5, 0.5]
+  tversky_alpha: 0.5
+  tversky_beta: 0.5
+  augmentations:
+    random_resized_crop: true
+
+logging:
+  project_name: burn-scar-detection-finetune

@@ -1,9 +1,5 @@
 """
 Evaluate checkpoints on the held-out test fires at a FIXED decision threshold.
-
-Honest protocol: the threshold is fixed at 0.5 for every model (no per-model
-tuning of any kind on the test fires), so the comparison isolates the effect of
-the training-loss change. Reports precision / recall / IoU per fire + macro.
 """
 import argparse
 import sys
@@ -12,13 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import numpy as np
 import torch
 import xarray as xr
-import yaml
 
-from src.data import _restore_crs
+from src.data import _restore_crs, load_config
 from src.model import BurnScarModel
+from src.utils import get_device, water_mask
 from run_inference import run_inference
 
-TEST_FIRES = ["woolsey_fire_2018", "east_troublesome_2020", "thomas_fire_2017"]
+TEST_FIRES = ["woolsey_fire_2018", "thomas_fire_2017", "palisades_fire_2025", "eaton_fire_2025"]
 
 
 def metrics(pred, true, valid):
@@ -36,28 +32,50 @@ def main():
     ap.add_argument("--checkpoints", nargs="+", required=True)
     ap.add_argument("--config", default="configs/train_config.yaml")
     ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument("--fires", nargs="+", default=None, help="Subset of test fires to evaluate")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(open(args.config))
+    global TEST_FIRES
+    if args.fires:
+        TEST_FIRES = args.fires
+
+    cfg = load_config(args.config)
     bands = cfg["data"]["bands"]
     ps = cfg["data"]["patch_size"]
     dnbr_t = cfg["data"].get("dnbr_threshold", 0.10)
     cache = cfg["data"]["cache_dir"]
-    device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+    device = get_device()
 
-    # Pre-load test scenes once
+    # Pre-load test scenes — pull from S3 if not cached locally.
+    S3_CACHE = "s3://burn-scar-detection/hls-cache"
     scenes = {}
     for name in TEST_FIRES:
-        pre = _restore_crs(xr.open_dataset(f"{cache}/{name}_pre.nc", engine="h5netcdf"))
-        post = _restore_crs(xr.open_dataset(f"{cache}/{name}_post.nc", engine="h5netcdf"))
+        pre_path = Path(f"{cache}/{name}_pre.nc")
+        post_path = Path(f"{cache}/{name}_post.nc")
+        for path in (pre_path, post_path):
+            if not path.exists():
+                import subprocess
+                s3_key = f"{S3_CACHE}/{path.name}"
+                print(f"  {path.name} not cached — pulling from {s3_key}", flush=True)
+                r = subprocess.run(
+                    ["aws", "s3", "cp", s3_key, str(path), "--region", "us-west-2"],
+                    capture_output=True,
+                )
+                if r.returncode != 0:
+                    raise FileNotFoundError(
+                        f"{path} not found locally or on S3. "
+                        f"Run: python run_training.py --config {args.config} --download-only"
+                    )
+        pre = _restore_crs(xr.open_dataset(pre_path, engine="h5netcdf"))
+        post = _restore_crs(xr.open_dataset(post_path, engine="h5netcdf"))
         post = post.rio.reproject_match(pre)
         scenes[name] = (pre, post)
 
     results = {}
     for ckpt in args.checkpoints:
+        state = torch.load(ckpt, map_location=device, weights_only=False)
         model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
                               in_channels=cfg["model"]["in_channels"])
-        state = torch.load(ckpt, map_location=device, weights_only=False)
         model.load_state_dict(state["model_state_dict"])
         model = model.to(device)
         label = ckpt.split("/")[-2]
@@ -69,9 +87,7 @@ def main():
                 dnbr_threshold=dnbr_t, pred_threshold=args.threshold,
             )
             # Same NDWI water exclusion as the deployed pipeline.
-            g = post["B03"].values.astype(np.float32)
-            nir = post["B8A"].values.astype(np.float32)
-            water = (g - nir) / (g + nir + 1e-8) > 0.0
+            water = water_mask(post)
             if water.shape == pred.shape:
                 pred = pred.copy(); true = true.copy()
                 pred[water] = 0; true[water] = 0

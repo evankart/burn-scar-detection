@@ -15,7 +15,7 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-$HOME/burn-scar-detection}"
 S3_BUCKET="${S3_BUCKET:-s3://burn-scar-detection}"
-EXP="${EXP:-finetune_big}"
+EXP="${EXP:-finetune_v2}"
 CONFIG="${CONFIG:-configs/finetune_config.yaml}"
 
 cd "$REPO_DIR"
@@ -36,6 +36,18 @@ python -m pip install -q -r requirements.txt
 
 # --- train ---
 export MPLBACKEND=Agg
+
+# Step 1: download/cache all regions (with the config's band set) WITHOUT training.
+echo "=== Downloading HLS for $CONFIG (download-only) ==="
+python -u run_training.py --config "$CONFIG" --experiment-name "$EXP" --download-only
+
+# Step 2: brightness diagnostic — prints per-band train-fire medians vs the
+# Prithvi pretraining mean so we can see if 2.0 needs a brightness gain before
+# committing GPU hours. Non-fatal: never blocks the run.
+echo "=== Band-brightness diagnostic ==="
+python -u scripts/band_stats_v2.py --config "$CONFIG" || echo "(diagnostic failed; continuing)"
+
+# Step 3: train (caches are warm, so this skips re-download).
 echo "=== Training $EXP with $CONFIG ==="
 python -u run_training.py --config "$CONFIG" --experiment-name "$EXP"
 

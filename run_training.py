@@ -1,10 +1,7 @@
 """
 Main training script for burn scar detection.
 
-Train on 10 large California fires, evaluate on the held-out Woolsey Fire.
-
 Usage:
-    python run_training.py
     python run_training.py --config configs/train_config.yaml
 """
 
@@ -12,15 +9,17 @@ import argparse
 import logging
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 warnings.filterwarnings("ignore", message=".*unauthenticated.*HF Hub.*")
 
+DOWNLOAD_TIMEOUT_SEC = 300  # 5 min per fire; hangs beyond this indicate a bad granule
+
 import numpy as np
-import yaml
 import torch
 
-from src.data import HLSDownloader, process_region, create_dataloaders
+from src.data import HLSDownloader, process_region, create_dataloaders, load_config
 from src.model import BurnScarModel
 from src.train import Trainer
 from src.visualize import plot_training_curves
@@ -33,15 +32,25 @@ logger = logging.getLogger(__name__)
 
 
 def download_regions(regions: list[dict], config_path: str) -> dict:
-    """Download all regions, return {name: {pre: Path, post: Path}}."""
+    """Download all regions, return {name: {pre: Path, post: Path}}.
+
+    Each fire is given DOWNLOAD_TIMEOUT_SEC to complete. Fires that hang
+    (e.g. bad HLS granule, slow tile) are skipped with a warning so one
+    stuck fire can't block the entire pipeline.
+    """
     downloader = HLSDownloader(config_path)
     results = {}
     for region in regions:
-        try:
-            paths = downloader.download_region(region)
-            results[region["name"]] = paths
-        except Exception as e:
-            logger.error(f"Failed to download {region['name']}: {e}")
+        name = region["name"]
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(downloader.download_region, region)
+            try:
+                paths = future.result(timeout=DOWNLOAD_TIMEOUT_SEC)
+                results[name] = paths
+            except FuturesTimeoutError:
+                logger.warning(f"  {name}: SKIPPED — download timed out after {DOWNLOAD_TIMEOUT_SEC}s")
+            except Exception as e:
+                logger.error(f"  {name}: SKIPPED — {e}")
     return results
 
 
@@ -75,16 +84,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/train_config.yaml")
     parser.add_argument("--experiment-name", default="default")
-    # Optional overrides for the precision/recall sweep. Tversky alpha penalizes
-    # false positives, beta penalizes false negatives (alpha=beta=0.5 == Dice).
+    # Optional loss overrides (see README): alpha=FP, beta=FN penalty.
     parser.add_argument("--tversky-alpha", type=float, default=None)
     parser.add_argument("--tversky-beta", type=float, default=None)
     parser.add_argument("--class-weights", type=float, nargs=2, default=None,
                         help="Override CE class weights, e.g. --class-weights 0.5 0.5")
+    parser.add_argument("--download-only", action="store_true",
+                        help="Download/cache all regions then exit (no training). "
+                             "Lets a brightness diagnostic run before GPU hours.")
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
 
     if args.tversky_alpha is not None:
         config["training"]["tversky_alpha"] = args.tversky_alpha
@@ -110,13 +120,16 @@ def main():
     logger.info(f"Test fires:  {[r['name'] for r in test_regions]}")
     downloaded = download_regions(all_regions, args.config)
 
+    if args.download_only:
+        logger.info(f"--download-only: cached {len(downloaded)}/{len(all_regions)} "
+                    f"regions. Exiting before training.")
+        return
+
     # --- 2. Build train patches (fire-based split, test fires excluded) ---
     logger.info("=== Preprocessing train fires ===")
     train_patches = collect_patches(train_regions, downloaded, config)
 
-    # Hard-negative regions: unburned dry SoCal terrain (≈all-background masks).
-    # They teach the post-only model that dark/dry land is not burned, curbing
-    # over-prediction. Downloaded + patched through the same pipeline.
+    # Hard-negative regions (unburned terrain) curb over-prediction; see README.
     negative_regions = config["data"].get("negative_regions", [])
     if negative_regions:
         logger.info(f"=== Preprocessing hard-negative regions: {[r['name'] for r in negative_regions]} ===")
@@ -131,11 +144,7 @@ def main():
 
     val_fires = config["data"].get("val_fires", [])
     if val_fires:
-        # Fire-based split: hold out whole fires for validation so train and val
-        # patches never come from the same scene. A random patch split lets
-        # patches from one fire land in both train and val (spatially adjacent,
-        # near-duplicate), giving an optimistic val IoU that hides overfitting —
-        # which matters most when fine-tuning the full ViT.
+        # Fire-based split: hold out whole fires (avoids train/val leakage); see README.
         split_patches = {
             "train": [p for p in train_patches if p.get("region_name") not in val_fires],
             "val":   [p for p in train_patches if p.get("region_name") in val_fires],
