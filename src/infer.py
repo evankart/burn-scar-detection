@@ -239,12 +239,32 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
 
     _, h, w = image.shape
 
+    # Build pre-inference cloud/water mask on the original (unpadded) scene.
+    # Prevents cloud and water pixels from accumulating burn probability scores —
+    # post-inference zeroing still lets the model score those pixels first, leaving
+    # residual probability artefacts at cloud/water edges.
+    ndwi_thresh = cfg["data"].get("water_ndwi_threshold", 0.0)
+    pre_cloud = water_mask(post_ds, threshold=ndwi_thresh) | cloud_over_water_mask(post_ds)
+    if _fmask_raw is not None:
+        from src.data import FMASK_BAD_BITS
+        fmask = _fmask_raw
+        if fmask.shape != (h, w):
+            from PIL import Image as _PIL
+            fmask = np.array(_PIL.fromarray(fmask).resize((w, h), _PIL.NEAREST))
+        pre_cloud |= (fmask.astype(np.uint8) & FMASK_BAD_BITS) != 0
+    elif "Fmask" in post_ds:
+        from src.data import FMASK_BAD_BITS
+        pre_cloud |= (post_ds["Fmask"].values.astype(np.uint8) & FMASK_BAD_BITS) != 0
+
     pad_h, pad_w = max(0, patch_size - h), max(0, patch_size - w)
     if pad_h or pad_w:
         image = np.pad(image, ((0, 0), (0, pad_h), (0, pad_w)), constant_values=np.nan)
+        pre_cloud = np.pad(pre_cloud, ((0, pad_h), (0, pad_w)), constant_values=False)
     _, H, W = image.shape
 
     valid_px = ~(np.isnan(image).any(axis=0) | (np.nan_to_num(image).max(axis=0) == 0))
+    valid_px &= ~pre_cloud
+
     acc = np.zeros((H, W), np.float32); cnt = np.zeros((H, W), np.float32)
     stride = patch_size // 2
     ys = list(range(0, H - patch_size + 1, stride)) or [0]
@@ -271,25 +291,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
 
     from scipy.ndimage import binary_erosion
     pred[~binary_erosion(valid_px, iterations=10)] = 0
-
-    # NDWI+MNDWI water mask + cloud-over-water mask (fallback when Fmask unavailable)
-    water = water_mask(post_ds, threshold=cfg["data"].get("water_ndwi_threshold", 0.0))
-    clouds = cloud_over_water_mask(post_ds)
-    combined = water | clouds
-    if pad_h or pad_w:
-        combined = np.pad(combined, ((0, pad_h), (0, pad_w)), constant_values=False)
-    pred[combined] = 0
-
-    # HLS Fmask: zero out cloud (bit 1) and cloud shadow (bit 3) pixels.
-    if _fmask_raw is not None:
-        fmask = _fmask_raw
-        if fmask.shape != (h, w):
-            from PIL import Image as _PIL
-            fmask = np.array(_PIL.fromarray(fmask).resize((w, h), _PIL.NEAREST))
-        cloud_mask = ((fmask & 0b00001010) != 0)
-        if pad_h or pad_w:
-            cloud_mask = np.pad(cloud_mask, ((0, pad_h), (0, pad_w)), constant_values=False)
-        pred[cloud_mask] = 0
+    pred[pre_cloud] = 0
 
     # crop back to the true scene size
     pred = pred[:h, :w]
