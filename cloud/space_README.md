@@ -3,8 +3,8 @@ title: Wildfire Burn Scar Detection
 emoji: 🔥
 colorFrom: red
 colorTo: yellow
-sdk: streamlit
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
 license: mit
 ---
