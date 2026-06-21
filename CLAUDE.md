@@ -14,7 +14,7 @@ Wildfire burn scar segmentation from HLS (Harmonized Landsat Sentinel-2) imagery
 - **Encoder:** Prithvi-EO-2.0-300M (ViT-Large, embed_dim=1024, depth=24, frozen epochs 1-2 then unfrozen)
 - **Decoder:** FPN, 3.8M trainable params
 - **Bands:** B02, B03, B04, B8A, B11, B12 (HLS Sentinel naming)
-- **Results (finetune_v3, 100 fires, Optuna-tuned HPs, fixed inference masking):**
+- **Results (finetune_v3, 92 fires, Optuna-tuned HPs, fixed inference masking):**
   - Woolsey 0.890/0.850/**0.769** | Thomas 0.947/0.729/**0.700** | Palisades 0.969/0.710/**0.694** | Eaton 0.958/0.771/**0.746** | **Macro IoU 0.727**
   - Palisades improved substantially after fixing pre-inference water masking (was 0.393)
 - No brightness gain applied (fine-tuning adapted encoder to HLS distribution)
@@ -42,66 +42,40 @@ All fires defined in `configs/train_config.yaml` under `data.fires`, each with `
 **Current training fires: 92** — 37 US fires (CA, OR, AZ, NM, WA, CO) plus 55 global GlobFire/GWIS events across 6 biomes (S. American cerrado, sub-Saharan savanna, Mediterranean shrubland, Australian eucalyptus, Canadian boreal, Siberian taiga). Global events were selected from `data/globfire/*.csv` via `scripts/globfire_to_config.py` (names tagged `gwis_<biome>_<year>_<id>`, all `role: train`).
 **Test fires (never train on, never tune threshold on): 4** — palisades_fire_2025, eaton_fire_2025, woolsey_fire_2018, thomas_fire_2017.
 
-## Pending work (priority order)
+## Completed work
 
-### 1. Hyperparameter search (Optuna, ~10 trials, ~$15 on AWS)
-Run before next full retraining. Tune:
-- `learning_rate`: 1e-4 to 1e-3
-- `backbone_lr_multiplier`: 0.01 to 0.1
-- `tversky_alpha`: 0.3 to 0.7
-- `class_weights[1]` (burn class): 0.4 to 0.7
+### Optuna hyperparameter search — DONE
+7 trials (TPE), 14-fire fast subset, 5 epochs each, frozen encoder.
+Best trial #4: `lr=2.01e-4`, `backbone_lr_multiplier=0.033`, `tversky_alpha=0.473`, `class_weight_burn=0.487` (val burn-class IoU=0.6578).
+Artifacts in `checkpoints/optuna/` (study.pkl, best_params.yaml, plots).
 
-Metric: val IoU on carr_fire_2018 + holy_2018 (fire-based val split, never test fires).
-Implement in `scripts/optuna_search.py`. Each trial trains to early stopping. Upload best trial checkpoint to S3. Do not tune on test fires.
+### Fmask per-pixel cloud masking — DONE
+`FMASK_BAD_BITS = 0b00010000` (snow only) in `src/data.py`. Cloud/shadow intentionally excluded — triggers on smoke/haze over burned land (Thomas fire recall dropped 0.73→0.26 when cloud pixels were masked).
 
-### 2. Fmask per-pixel cloud masking
-Implement before adding global fires. HLS QA band has per-pixel bit flags:
-- Bit 1: cirrus, Bit 2: cloud, Bit 8: cloud shadow, Bit 16: snow, Bit 32: water
-Apply in `src/data.py` `load_and_merge_scenes()` — download QA band alongside spectral bands, mask flagged pixels to nodata before computing dNBR or saving cache. Without this, cloudy pixels can contaminate labels in tropical/boreal regions with persistent cloud.
+### Global fire expansion — DONE (92 fires)
+55 global events added via `scripts/globfire_to_config.py` from `data/globfire/*.csv` (one CSV per biome). All biomes represented: Australian eucalyptus, Canadian boreal, Siberian taiga, Mediterranean shrubland, South American cerrado, sub-Saharan savanna.
 
-### 3. Global fire expansion (target: ~100 fires total) — DONE (92 fires)
-Source: **GWIS / GlobFire** — single source for both US and global fires.
-Filter: year ≥ 2015 (HLS era), burned area > 10,000 ha, biome diversity required.
-55 global events were added from `data/globfire/*.csv` (one CSV per biome) via
-`python scripts/globfire_to_config.py --csv <biome>.csv --tag <tag> --min-sep-km 50 --max 10 --append-to configs/train_config.yaml`.
-Imagery still has to be downloaded in-region on AWS (`run_training.py --download-only`) before the retrain.
+### finetune_v3 retrain — DONE
+92 fires, 12 epochs, best epoch 7 (val mean_iou=0.8005). Checkpoint at `checkpoints/finetune_v3/best_model.pt` on HF dataset repo.
 
-Target biomes (now represented):
-- Australia — eucalyptus/dry sclerophyll
-- Canada — boreal forest
-- Siberia/Russia — taiga
-- Mediterranean — shrubland (Spain, Greece, Portugal)
-- South America — cerrado/savanna
-- Sub-Saharan Africa — savanna
+### BurnScars baseline comparison — DONE
+IBM/NASA `Prithvi-EO-2.0-300M-BurnScars` (UNet decoder) evaluated on same 4 test fires.
+Results: Woolsey 0.757 | Thomas 0.655 | Palisades 0.519 | Eaton 0.376 | **Macro 0.577** (vs our 0.727).
+Implemented in `notebooks/demo_analysis.ipynb` via `terratorch.models.EncoderDecoderFactory`.
 
-Keep current 37 US fires. Add ~63 global fires. Implement Fmask (item 2) before downloading global fires.
+### Notebook (`notebooks/demo_analysis.ipynb`) — DONE
+- Per-fire 3×2 visualization: RGB · GT | our model · our errors | baseline · baseline errors
+- finetune_v3 training curves (loss + IoU, unfreeze epoch marked)
+- Full Optuna trial table + param importance plots
+- Pipeline comparison table (frozen → finetune_v2 → finetune_v3)
 
-For each new fire, add to `configs/train_config.yaml` with:
-```yaml
-- name: fire_name_year
-  lat: <center_lat>
-  lon: <center_lon>
-  buffer_km: <radius>
-  post_fire_date: "YYYY-MM-DD"
-  pre_fire_date: "YYYY-MM-DD"
-  role: train
-```
+## Pending work
 
-### 4. Retrain with best hyperparams + global fires
-After items 1–3: retrain on AWS g5.xlarge using `cloud/run_job.sh`. Update `finetune_config.yaml` with best Optuna hyperparams. Evaluate on same 3 test fires at fixed 0.5 threshold. Update README results table.
-
-### 5. Notebook improvements (`notebooks/demo_analysis.ipynb`)
-- **Remove** brightness gain investigation section (solved, no longer relevant)
-- **Fill in** 1.0 vs 2.0 comparison with real numbers (note: pipeline comparison not controlled ablation — encoder size, fine-tuning, batch size all changed)
-- **Add** finetune_v2 training curves (loss + IoU over epochs, from `checkpoints/finetune_v2/history.pt`)
-- **Add** Optuna hyperparameter search results (best trial, param importance plot, search trajectory) — add after search completes
-- **Add** more inference visualizations: side-by-side pred vs dNBR label on all 3 test fires, severity overlay
-
-### 6. Prithvi BurnScars model comparison (notebook)
-Add a notebook section comparing our model against `ibm-nasa-geospatial/Prithvi-EO-2.0-300M-BurnScars` (IBM/NASA's purpose-built burn scar model, UNet decoder). Run their model on our 3 held-out test fires at fixed 0.5 threshold. Report P/R/IoU alongside ours.
-
-### 7. UI: multi-tile merge in custom AOI tab
+### 1. UI: multi-tile merge in custom AOI tab
 When user draws a bounding box spanning two MGRS tiles, current code locks to one tile and silently drops the other half. Fix: detect when the drawn box overlaps multiple tiles, warn the user, and offer to merge scenes from both tiles into a mosaic. Implement in `src/app/streamlit_app.py` and `src/infer.py`.
+
+### 2. Next retrain (if pursued)
+After adding more fires or improving labels: retrain on AWS g5.xlarge using `cloud/run_job.sh`. Run Optuna again on the new fire set first. Evaluate on same 4 test fires at fixed 0.5 threshold. Update README results table.
 
 ## AWS / deployment
 - **Instance:** g5.xlarge (A10G 24GB GPU, 16GB RAM), us-west-2
@@ -115,10 +89,16 @@ When user draws a bounding box spanning two MGRS tiles, current code locks to on
 - **pip install:** always `source /opt/pytorch/bin/activate` first; `h5py` must be installed alongside `h5netcdf`
 
 ## Deployment pipeline
+- **HF Space:** `evankart/wildfire-burn-scar-detection` (Docker SDK, Streamlit on port 7860)
+- **SDK change:** HF removed native Streamlit SDK; Space now uses Docker via `Dockerfile` in repo root.
+- **`packages.txt`:** empty — rasterio bundles its own GDAL; system `libgdal-dev` caused conflicts.
+- **NASA Earthdata credentials:** set `EARTHDATA_USERNAME` + `EARTHDATA_PASSWORD` as HF Space secrets (Settings → Variables and secrets). Required for custom AOI inference.
+
 1. Make changes on `cloud-deploy` branch
-2. `python scripts/push_to_space.py` — deploys code to HF Space
+2. `python scripts/push_to_space.py` — deploys code to HF Space (`evankart/wildfire-burn-scar-detection`)
 3. `hf upload evankart/burn-scar-detection-data <checkpoint> <checkpoint> --repo-type dataset` — uploads checkpoint
-4. HF Space loads checkpoint from dataset repo on cold start via `src/infer.py:load_model()`
+4. Push updated prediction `.npz` files to `predictions/*.npz` in dataset repo (path the app downloads from)
+5. HF Space loads checkpoint from dataset repo on cold start via `src/infer.py:load_model()`
 
 ## README update checklist (after any retraining)
 - Results table (P/R/IoU per fire + macro)
