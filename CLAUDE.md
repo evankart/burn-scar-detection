@@ -1,7 +1,7 @@
 # Burn Scar Detection — Claude Code Instructions
 
 ## Project overview
-Wildfire burn scar segmentation from HLS (Harmonized Landsat Sentinel-2) imagery using Prithvi-EO-2.0-300M (IBM/NASA) with an FPN decoder. Deployed at huggingface.co/spaces/evankart/burn-scar-detection. All data is HLS (`HLSS30.v2.0`) via `earthaccess` — no Sentinel-2/Planetary Computer code remains.
+Wildfire burn scar segmentation from HLS (Harmonized Landsat Sentinel-2) imagery using Prithvi-EO-2.0-300M (IBM/NASA) with an FPN decoder. Deployed at huggingface.co/spaces/evankart/wildfire-burn-scar-detection. All data is HLS (`HLSS30.v2.0`) via `earthaccess` — no Sentinel-2/Planetary Computer code remains.
 
 ## Hard constraints (never violate)
 - **Never tune the decision threshold on test fires.** Threshold is fixed at 0.5 a priori. Test fires are `woolsey_fire_2018`, `thomas_fire_2017`, `palisades_fire_2025`, `eaton_fire_2025`.

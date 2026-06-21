@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from huggingface_hub import HfApi
 
 api = HfApi()
-space = "evankart/burn-scar-detection"
+space = "evankart/wildfire-burn-scar-detection"
 
 uploads = [
     ("requirements.txt", "requirements.txt"),
