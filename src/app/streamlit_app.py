@@ -503,7 +503,7 @@ def main():
         )
         st.caption(
             "Fine-tuned [Prithvi-EO-2.0-300M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M) "
-            "(IBM × NASA ViT-Large, 300M params) on 100 wildfires — 37 US + 55 global across 6 biomes. "
+            "(IBM × NASA ViT-Large, 300M params) on 92 wildfires — 37 US + 55 global across 6 biomes. "
             "Evaluated on 4 held-out California fires never seen during training."
         )
     metrics_placeholder = st.sidebar.empty()
@@ -633,7 +633,7 @@ def main():
 
         #### Train / test split
 
-        Trained on 100 wildfires — 37 US fires across 6 states (CA, OR, AZ, NM, WA, CO) plus
+        Trained on 92 wildfires — 37 US fires across 6 states (CA, OR, AZ, NM, WA, CO) plus
         55 global GlobFire/GWIS events spanning 6 biomes (South American cerrado, sub-Saharan savanna,
         Mediterranean shrubland, Australian eucalyptus, Canadian boreal, Siberian taiga).
         US fires include: {", ".join(TRAIN_FIRES)}.
