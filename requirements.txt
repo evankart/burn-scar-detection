@@ -21,3 +21,4 @@ pyyaml>=6.0
 optuna>=3.6.0
 pystac-client>=0.7.0
 planetary-computer>=1.0.0
+requests>=2.31.0
