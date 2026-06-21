@@ -4,7 +4,7 @@ Burn scar segmentation from Harmonized Landsat Sentinel-2 (HLS) satellite imager
 
 **Live demo:** [huggingface.co/spaces/evankart/wildfire-burn-scar-detection](https://huggingface.co/spaces/evankart/wildfire-burn-scar-detection)
 
-Trained on **100 wildfires** — 37 US fires across 5 states (CA, OR, AZ, NM, WA, CO) plus 55 global GlobFire/GWIS events spanning 6 biomes — with Optuna-tuned hyperparameters. Evaluated on 4 held-out fires at a fixed decision threshold of 0.5.
+Trained on **92 wildfires** — 37 US fires across 5 states (CA, OR, AZ, NM, WA, CO) plus 55 global GlobFire/GWIS events spanning 6 biomes — with Optuna-tuned hyperparameters. Evaluated on 4 held-out fires at a fixed decision threshold of 0.5.
 
 ## Results (held-out test fires, threshold 0.5)
 
@@ -59,7 +59,7 @@ Early experiments with a **frozen** Prithvi-EO-1.0-100M encoder over-predicted b
 
 ## Training details (finetune_v3)
 
-- **Dataset:** 100 training fires — 37 US + 55 global GlobFire/GWIS events across 6 biomes
+- **Dataset:** 92 training fires — 37 US + 55 global GlobFire/GWIS events across 6 biomes
 - **Schedule:** Frozen encoder epochs 1–2 (decoder warmup), unfrozen epoch 3+ with LLRD (decay=0.75, backbone LR multiplier=0.016), cosine LR, early stopping patience=5
 - **Best checkpoint:** epoch 7 (val burn-class IoU=0.738)
 - **Hardware:** AWS g5.xlarge (A10G 24GB), ~2.5 hrs
