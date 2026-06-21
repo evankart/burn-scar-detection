@@ -276,7 +276,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     pred = (prob > pred_threshold).astype(np.uint8)
 
     from scipy.ndimage import binary_erosion
-    pred[~binary_erosion(valid_px, iterations=10)] = 0
+    pred[~binary_erosion(valid_px, iterations=2)] = 0
     pred[pre_cloud] = 0
 
     # crop back to the true scene size
