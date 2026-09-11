@@ -37,6 +37,9 @@ Thumbs.db
 # Personal notes (local only)
 literature.md
 
+# Claude Code instructions (internal, not public-facing)
+CLAUDE.md
+
 # Generated outputs
 training_curves.png
 *.log
