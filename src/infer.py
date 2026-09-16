@@ -21,9 +21,13 @@ _CONFIG = "configs/train_config.yaml"
 HF_REPO = "evankart/burn-scar-detection-data"
 
 
-def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model.pt",
+def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.pt",
                config_path: str = _CONFIG):
-    """Load the deployed model once (cache with st.cache_resource in the app)."""
+    """Load the deployed model once (cache with st.cache_resource in the app).
+
+    Uses a weights-only checkpoint (no optimizer state) to keep memory down —
+    the full training checkpoint is ~3x larger and OOMs low-memory deploys.
+    """
     cfg = load_config(config_path)
     device = get_device()
     # Fetch the checkpoint from HF if it isn't present locally (cloud deploy).
