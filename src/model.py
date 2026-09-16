@@ -104,6 +104,7 @@ class BurnScarModel(nn.Module):
         num_classes: int = 2,
         in_channels: int = 6,
         freeze_backbone: bool = False,
+        load_pretrained: bool = True,
         **kwargs,
     ):
         super().__init__()
@@ -131,14 +132,18 @@ class BurnScarModel(nn.Module):
             encoder_only=True,
         )
 
-        weights_path = hf_hub_download(cfg["repo"], cfg["weights"])
-        state = torch.load(weights_path, map_location="cpu", weights_only=False)
-        if "model" in state:
-            state = state["model"]
-        missing, unexpected = mae.load_state_dict(state, strict=False)
-        if missing:
-            logger.warning(f"Missing keys: {missing[:5]}...")
-        logger.info("Prithvi-EO-2.0 weights loaded")
+        # Skip downloading/loading the pretrained encoder weights when a
+        # fine-tuned checkpoint is about to be loaded over them anyway
+        # (e.g. deployed inference) — halves peak memory during model init.
+        if load_pretrained:
+            weights_path = hf_hub_download(cfg["repo"], cfg["weights"])
+            state = torch.load(weights_path, map_location="cpu", weights_only=False)
+            if "model" in state:
+                state = state["model"]
+            missing, unexpected = mae.load_state_dict(state, strict=False)
+            if missing:
+                logger.warning(f"Missing keys: {missing[:5]}...")
+            logger.info("Prithvi-EO-2.0 weights loaded")
 
         self.encoder = mae.encoder
 
