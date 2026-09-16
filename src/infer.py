@@ -28,19 +28,26 @@ def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.p
     Uses a weights-only checkpoint (no optimizer state) to keep memory down —
     the full training checkpoint is ~3x larger and OOMs low-memory deploys.
     """
+    print("[load_model] start", flush=True)
     cfg = load_config(config_path)
     device = get_device()
     # Fetch the checkpoint from HF if it isn't present locally (cloud deploy).
     if not Path(checkpoint).exists():
         from huggingface_hub import hf_hub_download
-        logger.info(f"Checkpoint not local — downloading {checkpoint} from {HF_REPO}")
+        print(f"[load_model] downloading {checkpoint} from {HF_REPO}", flush=True)
         hf_hub_download(repo_id=HF_REPO, repo_type="dataset", filename=checkpoint, local_dir=".")
-    state = torch.load(checkpoint, map_location=device, weights_only=False)
+        print("[load_model] download done", flush=True)
+    print("[load_model] constructing BurnScarModel (load_pretrained=False)", flush=True)
     model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
-                          in_channels=cfg["model"]["in_channels"])
+                          in_channels=cfg["model"]["in_channels"],
+                          load_pretrained=False)
+    print("[load_model] model constructed, loading checkpoint state dict", flush=True)
+    state = torch.load(checkpoint, map_location=device, weights_only=False)
+    print("[load_model] checkpoint loaded, calling load_state_dict", flush=True)
     model.load_state_dict(state["model_state_dict"])
+    del state
     model = model.to(device).eval()
-    logger.info(f"Loaded {checkpoint} on {device}")
+    print(f"[load_model] done, model on {device}", flush=True)
     return model, device, cfg
 
 
@@ -216,24 +223,30 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if pred_threshold is None:
         pred_threshold = cfg["data"].get("pred_threshold", 0.5)
 
+    print("[detect_burn_scar] start", flush=True)
     if prefetched is not None:
         image = prefetched["image"]
         post_ds = prefetched["post_ds"]
         scene_date = prefetched["scene_date"]
         n_scenes = prefetched["n_scenes"]
         bounds = prefetched["bounds"]
+        print("[detect_burn_scar] using prefetched scene", flush=True)
     else:
         dl = HLSDownloader(config_path=_CONFIG)
         end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
+        print("[detect_burn_scar] searching HLS granules", flush=True)
         granules = dl.search_scenes(tuple(bbox), f"{post_date}/{end}", max_cloud_cover=50)
         if not granules:
             raise ValueError("No clear HLS scene found for that area within ~30 days of "
                              "the date. Try another date or location.")
         scene_date = _granule_date(granules[0])
         n_scenes = len(granules)
+        print(f"[detect_burn_scar] downloading/merging {n_scenes} granule(s)", flush=True)
         post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
+        print("[detect_burn_scar] scene loaded, normalizing bands", flush=True)
         image = normalize_bands(post_ds, bands)
         bounds = _bounds_latlon(post_ds)
+        print(f"[detect_burn_scar] scene ready, shape={image.shape}", flush=True)
 
     _, h, w = image.shape
 
@@ -262,9 +275,13 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if ys[-1] != H - patch_size: ys.append(H - patch_size)
     if xs[-1] != W - patch_size: xs.append(W - patch_size)
 
+    n_patches = len(ys) * len(xs)
+    print(f"[detect_burn_scar] scene {H}x{W}, running {n_patches} patch(es) through model", flush=True)
     with torch.no_grad():
+        i = 0
         for y in ys:
             for x in xs:
+                i += 1
                 pv = valid_px[y:y + patch_size, x:x + patch_size]
                 if not pv.any():
                     continue
@@ -273,7 +290,9 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
                 probs = torch.softmax(model(t), dim=1)[0, 1].cpu().numpy()
                 acc[y:y + patch_size, x:x + patch_size][pv] += probs[pv]
                 cnt[y:y + patch_size, x:x + patch_size][pv] += 1
+                print(f"[detect_burn_scar] patch {i}/{n_patches} done", flush=True)
 
+    print("[detect_burn_scar] patch loop complete", flush=True)
     covered = cnt > 0
     prob = np.zeros((H, W), np.float32)
     prob[covered] = acc[covered] / cnt[covered]
