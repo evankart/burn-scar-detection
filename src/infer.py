@@ -42,7 +42,9 @@ def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.p
                           in_channels=cfg["model"]["in_channels"],
                           load_pretrained=False)
     print("[load_model] model constructed, loading checkpoint state dict", flush=True)
-    state = torch.load(checkpoint, map_location=device, weights_only=False)
+    # mmap keeps the 1.2GB file on disk-backed (reclaimable) pages instead of a second
+    # full copy in RAM, which is what killed the process at this step on Streamlit Cloud.
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False, mmap=True)
     print("[load_model] checkpoint loaded, calling load_state_dict", flush=True)
     model.load_state_dict(state["model_state_dict"])
     del state
