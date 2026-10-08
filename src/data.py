@@ -221,6 +221,7 @@ class HLSDownloader:
         so clean pixels from other scenes fill those gaps in the mosaic."""
         import gc
         from rioxarray.merge import merge_arrays
+        from src.utils import mem_note
 
         ref_da = self._make_target_grid(bbox)
         target_crs = ref_da.rio.crs
@@ -233,8 +234,10 @@ class HLSDownloader:
         last_err = None
         for granule in granules[:max_scenes]:
             granule_id = granule.get("meta", {}).get("native-id", "unknown")
+            print(f"[merge] loading {granule_id} | {mem_note()}", flush=True)
             try:
                 ds = self.load_scene(granule, bbox)
+                print(f"[merge] scene loaded | {mem_note()}", flush=True)
             except Exception as e:
                 last_err = e
                 logger.warning(f"Skipping scene {granule_id}: {type(e).__name__}: {e}")
@@ -273,6 +276,7 @@ class HLSDownloader:
                 msg += f" (last error: {type(last_err).__name__}: {last_err})"
             raise ValueError(msg)
 
+        print(f"[merge] all granules loaded, merging | {mem_note()}", flush=True)
         merged = {}
         for band in self.bands:
             mosaic = merge_arrays(per_band[band], bounds=bounds, res=(30.0, 30.0), nodata=np.nan)
