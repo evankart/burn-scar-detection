@@ -14,7 +14,7 @@ import torch
 
 from src.data import HLSDownloader, normalize_bands, load_config
 from src.model import BurnScarModel
-from src.utils import get_device, water_mask, cloud_over_water_mask
+from src.utils import get_device, water_mask, cloud_over_water_mask, mem_note
 
 logger = logging.getLogger(__name__)
 _CONFIG = "configs/train_config.yaml"
@@ -49,7 +49,7 @@ def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.p
     model.load_state_dict(state["model_state_dict"])
     del state
     model = model.to(device).eval()
-    print(f"[load_model] done, model on {device}", flush=True)
+    print(f"[load_model] done, model on {device} | {mem_note()}", flush=True)
     return model, device, cfg
 
 
@@ -225,7 +225,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if pred_threshold is None:
         pred_threshold = cfg["data"].get("pred_threshold", 0.5)
 
-    print("[detect_burn_scar] start", flush=True)
+    print(f"[detect_burn_scar] start | {mem_note()}", flush=True)
     if prefetched is not None:
         image = prefetched["image"]
         post_ds = prefetched["post_ds"]

@@ -10,6 +10,20 @@ import torch
 import xarray as xr
 
 
+def mem_note() -> str:
+    """Process RSS and cgroup usage/limit (MB), for diagnosing OOM kills on hosted deploys."""
+    def _read(path):
+        try:
+            return open(path).read().strip()
+        except OSError:
+            return None
+    rss = next((int(l.split()[1]) // 1024 for l in (_read("/proc/self/status") or "").splitlines()
+                if l.startswith("VmRSS")), None)
+    cur, lim = _read("/sys/fs/cgroup/memory.current"), _read("/sys/fs/cgroup/memory.max")
+    mb = lambda v: int(v) // 2**20 if v and v.isdigit() else v
+    return f"rss={rss}MB cgroup={mb(cur)}/{mb(lim)}MB"
+
+
 def get_device() -> torch.device:
     """Best available torch device: CUDA (AWS GPU) > MPS (Apple) > CPU.
 
