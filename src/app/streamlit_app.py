@@ -208,11 +208,14 @@ def _fetch_scene_cached(bbox: tuple, post_date: str) -> dict:
     return fetch_preview_tiles(bbox, post_date)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=1)
 def run_detection(bbox: tuple, post_date: str) -> dict:
     from src.infer import detect_burn_scar
     model, device, cfg = _load_model()
     return detect_burn_scar(bbox, post_date, model, device, cfg)
+
+
+MAX_AOI_KM2 = 2000
 
 
 def _aoi_area_km2(bbox: tuple) -> float:
@@ -350,8 +353,10 @@ def custom_detection_view():
         return
 
     area = _aoi_area_km2(bbox)
-    if area > 10000:
-        st.warning("Large area — download and inference will be slow. A smaller AOI (under ~10,000 km²) is recommended.")
+    if area > MAX_AOI_KM2:
+        st.error(f"Area too large ({area:,.0f} km²). The hosted demo is limited to ~{MAX_AOI_KM2:,} km² "
+                 "to stay within memory — please draw a smaller box.")
+        return
 
     # --- Scene date selection ---
     show_more = st.session_state.get("aoi_show_more_dates", False)
