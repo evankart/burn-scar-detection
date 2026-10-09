@@ -6,6 +6,7 @@ lat/lon bounds.
 
 """
 import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -234,6 +235,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if pred_threshold is None:
         pred_threshold = cfg["data"].get("pred_threshold", 0.5)
 
+    t0 = time.time()
     print(f"[detect_burn_scar] start | {mem_note()}", flush=True)
     if prefetched is not None:
         image = prefetched["image"]
@@ -245,19 +247,19 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     else:
         dl = HLSDownloader(config_path=_CONFIG)
         end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
-        print("[detect_burn_scar] searching HLS granules", flush=True)
+        print(f"[detect_burn_scar] searching HLS granules | t={time.time() - t0:.0f}s", flush=True)
         granules = dl.search_scenes(tuple(bbox), f"{post_date}/{end}", max_cloud_cover=50)
         if not granules:
             raise ValueError("No clear HLS scene found for that area within ~30 days of "
                              "the date. Try another date or location.")
         scene_date = _granule_date(granules[0])
         n_scenes = len(granules)
-        print(f"[detect_burn_scar] downloading/merging {n_scenes} granule(s)", flush=True)
+        print(f"[detect_burn_scar] downloading/merging {n_scenes} granule(s) | t={time.time() - t0:.0f}s", flush=True)
         post_ds = dl.load_and_merge_scenes(granules, tuple(bbox), max_scenes=_MAX_SCENES)
         print("[detect_burn_scar] scene loaded, normalizing bands", flush=True)
         image = normalize_bands(post_ds, bands)
         bounds = _bounds_latlon(post_ds)
-        print(f"[detect_burn_scar] scene ready, shape={image.shape}", flush=True)
+        print(f"[detect_burn_scar] scene ready, shape={image.shape} | t={time.time() - t0:.0f}s", flush=True)
 
     _, h, w = image.shape
 
@@ -301,9 +303,9 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
                 probs = torch.softmax(model(t), dim=1)[0, 1].cpu().numpy()
                 acc[y:y + patch_size, x:x + patch_size][pv] += probs[pv]
                 cnt[y:y + patch_size, x:x + patch_size][pv] += 1
-                print(f"[detect_burn_scar] patch {i}/{n_patches} done", flush=True)
+                print(f"[detect_burn_scar] patch {i}/{n_patches} done | t={time.time() - t0:.0f}s", flush=True)
 
-    print("[detect_burn_scar] patch loop complete", flush=True)
+    print(f"[detect_burn_scar] patch loop complete | t={time.time() - t0:.0f}s", flush=True)
     covered = cnt > 0
     prob = np.zeros((H, W), np.float32)
     prob[covered] = acc[covered] / cnt[covered]
