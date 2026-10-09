@@ -118,9 +118,17 @@ class HLSDownloader:
                 return part[1:]
         return ""
 
-    def load_scene(self, granule, bbox: tuple) -> xr.Dataset:
+    @staticmethod
+    def _clip_to_bbox(da: xr.DataArray, bbox: tuple) -> xr.DataArray:
+        """Window-read to the bbox first (lazy isel), then polygon-clip the small
+        result, so a full 3660x3660 HLS tile is never materialized for a small AOI."""
+        da = da.rio.clip_box(*bbox, crs="EPSG:4326")
+        return da.rio.clip([mapping(box(*bbox))], crs="EPSG:4326")
+
+    def load_scene(self, granule, bbox: tuple, files: list | None = None) -> xr.Dataset:
         band_arrays = {}
-        files = earthaccess.open([granule])
+        if files is None:
+            files = earthaccess.open([granule])
 
         for band in self.bands:
             matched = [f for f in files if f.path.endswith(f".{band}.tif")]
@@ -128,8 +136,7 @@ class HLSDownloader:
                 raise ValueError(f"Band {band} not found in granule assets")
 
             da = rioxarray.open_rasterio(matched[0], mask_and_scale=True)
-            geom = box(*bbox)
-            da = da.rio.clip([mapping(geom)], crs="EPSG:4326")
+            da = self._clip_to_bbox(da, bbox)
             band_arrays[band] = da.squeeze("band", drop=True)
 
         ref_band = band_arrays[self.bands[0]]
@@ -161,17 +168,19 @@ class HLSDownloader:
             logger.warning(f"Could not load Fmask: {e}")
             return None
 
-    def _load_fmask_da(self, granule, bbox: tuple, ref_da: xr.DataArray) -> xr.DataArray | None:
+    def _load_fmask_da(self, granule, bbox: tuple, ref_da: xr.DataArray,
+                       files: list | None = None) -> xr.DataArray | None:
         """Fmask QA band as a DataArray reprojected onto ref_da's grid (nearest),
         so it aligns pixel-for-pixel with the loaded spectral bands. None if absent."""
         from rasterio.enums import Resampling
         try:
-            files = earthaccess.open([granule])
+            if files is None:
+                files = earthaccess.open([granule])
             matched = [f for f in files if f.path.endswith(".Fmask.tif")]
             if not matched:
                 return None
             da = rioxarray.open_rasterio(matched[0], mask_and_scale=False)
-            da = da.rio.clip([mapping(box(*bbox))], crs="EPSG:4326")
+            da = self._clip_to_bbox(da, bbox)
             da = da.squeeze("band", drop=True)
             if da.shape != ref_da.shape:
                 da = da.rio.reproject_match(ref_da, resampling=Resampling.nearest)
@@ -210,6 +219,15 @@ class HLSDownloader:
         )
         return ref.rio.write_crs(utm_epsg)
 
+    @staticmethod
+    def _close_files(files) -> None:
+        """Release remote file handles (and their read caches) once a granule is loaded."""
+        for f in files or []:
+            try:
+                f.close()
+            except Exception:
+                pass
+
     def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10,
                               apply_fmask: bool = True) -> xr.Dataset:
         """Mosaic up to max_scenes onto a fixed UTM grid spanning the bbox via
@@ -235,15 +253,18 @@ class HLSDownloader:
         for granule in granules[:max_scenes]:
             granule_id = granule.get("meta", {}).get("native-id", "unknown")
             print(f"[merge] loading {granule_id} | {mem_note()}", flush=True)
+            files = None
             try:
-                ds = self.load_scene(granule, bbox)
+                files = earthaccess.open([granule])
+                ds = self.load_scene(granule, bbox, files=files)
                 print(f"[merge] scene loaded | {mem_note()}", flush=True)
             except Exception as e:
                 last_err = e
                 logger.warning(f"Skipping scene {granule_id}: {type(e).__name__}: {e}")
+                self._close_files(files)
                 continue
             if apply_fmask:
-                fmask_da = self._load_fmask_da(granule, bbox, ds[self.bands[0]])
+                fmask_da = self._load_fmask_da(granule, bbox, ds[self.bands[0]], files=files)
                 if fmask_da is not None:
                     bad = (fmask_da.values.astype(np.uint8) & FMASK_BAD_BITS) != 0
                     if bad.any():
@@ -266,6 +287,7 @@ class HLSDownloader:
                 if da.rio.crs is not None and da.rio.crs != target_crs:
                     da = da.rio.reproject(target_crs)
                 per_band[band].append(da)
+            self._close_files(files)
             loaded += 1
             del ds
             gc.collect()
