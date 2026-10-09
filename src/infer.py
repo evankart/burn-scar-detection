@@ -19,6 +19,9 @@ from src.utils import get_device, water_mask, cloud_over_water_mask, mem_note
 logger = logging.getLogger(__name__)
 _CONFIG = "configs/train_config.yaml"
 HF_REPO = "evankart/burn-scar-detection-data"
+# Granules are sorted least-cloudy first; a few cover a small AOI and keep the hosted
+# app within Streamlit Cloud memory.
+_MAX_SCENES = 3
 
 
 def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.pt",
@@ -197,7 +200,7 @@ def fetch_scene(bbox: tuple, post_date: str, cfg, window_days: int = 30) -> dict
     if not granules:
         raise ValueError("No clear HLS scene found within ~30 days. Try another date or location.")
     scene_date = _granule_date(granules[0])
-    post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
+    post_ds = dl.load_and_merge_scenes(granules, tuple(bbox), max_scenes=_MAX_SCENES)
     image = normalize_bands(post_ds, _RGB_BANDS)
     valid_frac = float((~(np.isnan(image).any(axis=0) | (np.nan_to_num(image).max(axis=0) == 0))).mean())
     return {
@@ -244,7 +247,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         scene_date = _granule_date(granules[0])
         n_scenes = len(granules)
         print(f"[detect_burn_scar] downloading/merging {n_scenes} granule(s)", flush=True)
-        post_ds = dl.load_and_merge_scenes(granules, tuple(bbox))
+        post_ds = dl.load_and_merge_scenes(granules, tuple(bbox), max_scenes=_MAX_SCENES)
         print("[detect_burn_scar] scene loaded, normalizing bands", flush=True)
         image = normalize_bands(post_ds, bands)
         bounds = _bounds_latlon(post_ds)
