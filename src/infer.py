@@ -40,17 +40,23 @@ def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.p
         print(f"[load_model] downloading {checkpoint} from {HF_REPO}", flush=True)
         hf_hub_download(repo_id=HF_REPO, repo_type="dataset", filename=checkpoint, local_dir=".")
         print("[load_model] download done", flush=True)
-    print("[load_model] constructing BurnScarModel (load_pretrained=False)", flush=True)
-    model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
-                          in_channels=cfg["model"]["in_channels"],
-                          load_pretrained=False)
-    print("[load_model] model constructed, loading checkpoint state dict", flush=True)
-    # mmap keeps the 1.2GB file on disk-backed (reclaimable) pages instead of a second
-    # full copy in RAM, which is what killed the process at this step on Streamlit Cloud.
+    print("[load_model] constructing BurnScarModel on meta device (no weight allocation)", flush=True)
+    # Build the model with no storage, then point its parameters straight at the
+    # mmap'd checkpoint (assign=True). The weights stay file-backed and evictable
+    # rather than a 1.2GB private copy, which is what kept the 3GB Streamlit Cloud
+    # container at its limit before the first forward pass. Output is bit-identical.
+    with torch.device("meta"):
+        model = BurnScarModel(num_classes=cfg["model"]["num_classes"],
+                              in_channels=cfg["model"]["in_channels"],
+                              load_pretrained=False)
+    print("[load_model] mmapping checkpoint", flush=True)
     state = torch.load(checkpoint, map_location="cpu", weights_only=False, mmap=True)
-    print("[load_model] checkpoint loaded, calling load_state_dict", flush=True)
-    model.load_state_dict(state["model_state_dict"])
+    model.load_state_dict(state["model_state_dict"], assign=True)
     del state
+    leftover = [n for n, t in [*model.named_parameters(), *model.named_buffers()]
+                if t.device.type == "meta"]
+    if leftover:
+        raise RuntimeError(f"Checkpoint did not populate {len(leftover)} tensors, e.g. {leftover[:3]}")
     model = model.to(device).eval()
     print(f"[load_model] done, model on {device} | {mem_note()}", flush=True)
     return model, device, cfg
