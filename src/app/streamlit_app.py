@@ -23,6 +23,20 @@ st.set_page_config(
     layout="wide",
 )
 
+# Streamlit's wide layout still pads the main container heavily; stretch it edge to edge.
+st.markdown(
+    """
+    <style>
+    .block-container, [data-testid="stMainBlockContainer"] {
+        max-width: 100% !important;
+        padding-left: 1.5rem !important;
+        padding-right: 1.5rem !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 REGIONS = {
     "woolsey_fire_2018": {
         "display_name": "Woolsey Fire (2018)",
@@ -215,7 +229,9 @@ def run_detection(bbox: tuple, post_date: str) -> dict:
     return detect_burn_scar(bbox, post_date, model, device, cfg)
 
 
-MAX_AOI_KM2 = 2000
+# Hard cap keeps the hosted container within memory; above the soft limit we warn.
+MAX_AOI_KM2 = 10000
+SLOW_AOI_KM2 = 2000
 
 
 def _aoi_area_km2(bbox: tuple) -> float:
@@ -357,6 +373,9 @@ def custom_detection_view():
         st.error(f"Area too large ({area:,.0f} km²). The hosted demo is limited to ~{MAX_AOI_KM2:,} km² "
                  "to stay within memory — please draw a smaller box.")
         return
+    if area > SLOW_AOI_KM2:
+        st.warning(f"Large area ({area:,.0f} km²). Download and inference will be slow, and very "
+                   "large boxes may only be partially covered by the available scenes.")
 
     # --- Scene date selection ---
     show_more = st.session_state.get("aoi_show_more_dates", False)
