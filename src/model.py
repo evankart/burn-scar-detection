@@ -1,5 +1,6 @@
 """Burn scar segmentation on Prithvi-EO-2.0-300M + an FPN decoder."""
 
+import contextlib
 import importlib.util
 import logging
 
@@ -186,7 +187,9 @@ class BurnScarModel(nn.Module):
         x = pixel_values.unsqueeze(2).expand(-1, -1, self._num_frames, -1, -1).contiguous()
 
         # If encoder is frozen, skip the autograd tape entirely — saves GPU memory.
-        encoder_ctx = torch.no_grad() if not next(self.encoder.parameters()).requires_grad else torch.enable_grad()
+        # Otherwise inherit the caller's grad mode: enable_grad() here would override
+        # an outer no_grad() at inference and record activations for every layer.
+        encoder_ctx = torch.no_grad() if not next(self.encoder.parameters()).requires_grad else contextlib.nullcontext()
         with encoder_ctx:
             all_features = self.encoder.forward_features(x)
 

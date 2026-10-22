@@ -58,7 +58,7 @@ def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.p
                 if t.device.type == "meta"]
     if leftover:
         raise RuntimeError(f"Checkpoint did not populate {len(leftover)} tensors, e.g. {leftover[:3]}")
-    model = model.to(device).eval()
+    model = model.to(device).eval().requires_grad_(False)
     print(f"[load_model] done, model on {device} | {mem_note()}", flush=True)
     return model, device, cfg
 
@@ -294,8 +294,8 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         if valid_px[y:y + patch_size, x:x + patch_size].any()
     ]
     print(f"[detect_burn_scar] scene {H}x{W}, running {len(positions)} patch(es) through model", flush=True)
-    batch_size = 32
-    with torch.no_grad():
+    batch_size = 16
+    with torch.inference_mode():
         for i in range(0, len(positions), batch_size):
             batch = positions[i:i + batch_size]
             patches = np.stack([
@@ -308,7 +308,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
                 pv = valid_px[y:y + patch_size, x:x + patch_size]
                 acc[y:y + patch_size, x:x + patch_size][pv] += probs[pv]
                 cnt[y:y + patch_size, x:x + patch_size][pv] += 1
-            print(f"[detect_burn_scar] batch {i // batch_size + 1}/{(len(positions) + batch_size - 1) // batch_size} done | t={time.time() - t0:.0f}s", flush=True)
+            print(f"[detect_burn_scar] batch {i // batch_size + 1}/{(len(positions) + batch_size - 1) // batch_size} done | t={time.time() - t0:.0f}s | {mem_note()}", flush=True)
 
     print(f"[detect_burn_scar] patch loop complete | t={time.time() - t0:.0f}s", flush=True)
     covered = cnt > 0
