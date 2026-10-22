@@ -65,21 +65,29 @@ def run_inference(
     if xs and xs[-1] != w - patch_size:
         xs.append(w - patch_size)
 
-    with torch.no_grad():
-        for y in ys:
-            for x in xs:
-                pv = valid_px[y : y + patch_size, x : x + patch_size]
-                if not pv.any():
-                    continue
-                # Impute nodata to 0; only valid pixels are accumulated.
-                patch = np.nan_to_num(image[:, y : y + patch_size, x : x + patch_size], nan=0.0)
-                tensor = torch.from_numpy(patch).unsqueeze(0).float().to(device)
-                probs = torch.softmax(model(tensor), dim=1)[0, 1].cpu().numpy()
+    # Collect all valid patch positions, then run in batches.
+    positions = [
+        (y, x)
+        for y in ys
+        for x in xs
+        if valid_px[y : y + patch_size, x : x + patch_size].any()
+    ]
 
-                region = pred_mask[y : y + patch_size, x : x + patch_size]
-                creg = count_mask[y : y + patch_size, x : x + patch_size]
-                region[pv] += probs[pv]
-                creg[pv] += 1
+    batch_size = 32
+    with torch.no_grad():
+        for i in range(0, len(positions), batch_size):
+            batch_positions = positions[i : i + batch_size]
+            patches = np.stack([
+                np.nan_to_num(image[:, y : y + patch_size, x : x + patch_size], nan=0.0)
+                for y, x in batch_positions
+            ])
+            tensors = torch.from_numpy(patches).float().to(device)
+            batch_probs = torch.softmax(model(tensors), dim=1)[:, 1].cpu().numpy()
+
+            for (y, x), probs in zip(batch_positions, batch_probs):
+                pv = valid_px[y : y + patch_size, x : x + patch_size]
+                pred_mask[y : y + patch_size, x : x + patch_size][pv] += probs[pv]
+                count_mask[y : y + patch_size, x : x + patch_size][pv] += 1
 
     covered = count_mask > 0
     pred_mask[covered] /= count_mask[covered]

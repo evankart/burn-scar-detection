@@ -288,22 +288,27 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if ys[-1] != H - patch_size: ys.append(H - patch_size)
     if xs[-1] != W - patch_size: xs.append(W - patch_size)
 
-    n_patches = len(ys) * len(xs)
-    print(f"[detect_burn_scar] scene {H}x{W}, running {n_patches} patch(es) through model", flush=True)
+    positions = [
+        (y, x)
+        for y in ys for x in xs
+        if valid_px[y:y + patch_size, x:x + patch_size].any()
+    ]
+    print(f"[detect_burn_scar] scene {H}x{W}, running {len(positions)} patch(es) through model", flush=True)
+    batch_size = 32
     with torch.no_grad():
-        i = 0
-        for y in ys:
-            for x in xs:
-                i += 1
+        for i in range(0, len(positions), batch_size):
+            batch = positions[i:i + batch_size]
+            patches = np.stack([
+                np.nan_to_num(image[:, y:y + patch_size, x:x + patch_size], nan=0.0)
+                for y, x in batch
+            ])
+            tensors = torch.from_numpy(patches).float().to(device)
+            batch_probs = torch.softmax(model(tensors), dim=1)[:, 1].cpu().numpy()
+            for (y, x), probs in zip(batch, batch_probs):
                 pv = valid_px[y:y + patch_size, x:x + patch_size]
-                if not pv.any():
-                    continue
-                patch = np.nan_to_num(image[:, y:y + patch_size, x:x + patch_size], nan=0.0)
-                t = torch.from_numpy(patch).unsqueeze(0).float().to(device)
-                probs = torch.softmax(model(t), dim=1)[0, 1].cpu().numpy()
                 acc[y:y + patch_size, x:x + patch_size][pv] += probs[pv]
                 cnt[y:y + patch_size, x:x + patch_size][pv] += 1
-                print(f"[detect_burn_scar] patch {i}/{n_patches} done | t={time.time() - t0:.0f}s", flush=True)
+            print(f"[detect_burn_scar] batch {i // batch_size + 1}/{(len(positions) + batch_size - 1) // batch_size} done | t={time.time() - t0:.0f}s", flush=True)
 
     print(f"[detect_burn_scar] patch loop complete | t={time.time() - t0:.0f}s", flush=True)
     covered = cnt > 0
