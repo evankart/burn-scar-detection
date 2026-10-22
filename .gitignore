@@ -49,3 +49,4 @@ wandb/
 
 # Streamlit
 .streamlit/secrets.toml
+notebooks/
