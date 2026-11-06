@@ -18,9 +18,16 @@ uploads = [
     ("src/model.py", "src/model.py"),
     ("src/data.py", "src/data.py"),
     ("src/infer.py", "src/infer.py"),
+    ("src/limits.py", "src/limits.py"),
+    ("src/netcount.py", "src/netcount.py"),
     ("src/app/__init__.py", "src/app/__init__.py"),
     ("src/app/streamlit_app.py", "src/app/streamlit_app.py"),
     ("configs/train_config.yaml", "configs/train_config.yaml"),
+    # official CAL FIRE perimeters shown on the test-fire map
+    ("assets/perimeters/woolsey_fire_2018.geojson", "assets/perimeters/woolsey_fire_2018.geojson"),
+    ("assets/perimeters/thomas_fire_2017.geojson", "assets/perimeters/thomas_fire_2017.geojson"),
+    ("assets/perimeters/palisades_fire_2025.geojson", "assets/perimeters/palisades_fire_2025.geojson"),
+    ("assets/perimeters/eaton_fire_2025.geojson", "assets/perimeters/eaton_fire_2025.geojson"),
 ]
 
 # single commit so the Space rebuilds once, not once per file; anything on the

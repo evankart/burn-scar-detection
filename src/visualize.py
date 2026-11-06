@@ -78,6 +78,52 @@ def plot_predictions(
     return fig
 
 
+def plot_error_map(
+    image: np.ndarray,
+    true_mask: np.ndarray,
+    pred_mask: np.ndarray,
+    title: str = "",
+) -> plt.Figure:
+    """
+    Two panels: post-fire RGB | prediction vs. dNBR reference.
+
+    Error map colors: green = burned in both (hit), orange = burned in the
+    reference but missed by the model, red = flagged by the model but not
+    burned in the reference (false alarm). Unburned in both is left as the
+    dimmed satellite image.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+    rgb = np.stack([image[2], image[1], image[0]], axis=-1).astype(np.float32)
+    rgb = np.nan_to_num(_percentile_stretch(rgb), nan=0.0)
+    axes[0].imshow(rgb)
+    axes[0].set_title("Post-fire satellite image (HLS)")
+
+    t, p = true_mask.astype(bool), pred_mask.astype(bool)
+    overlay = np.zeros((*t.shape, 4), dtype=np.float32)
+    overlay[t & p] = [0.20, 0.70, 0.25, 0.85]
+    overlay[t & ~p] = [1.00, 0.60, 0.10, 0.85]
+    overlay[~t & p] = [0.90, 0.10, 0.10, 0.85]
+    axes[1].imshow(rgb * 0.5)
+    axes[1].imshow(overlay, interpolation="nearest")
+    axes[1].set_title("Model vs. dNBR reference")
+    axes[1].legend(
+        handles=[
+            Patch(facecolor="#33b340", label="Hit: burned in both"),
+            Patch(facecolor="#ff991a", label="Miss: burned, not detected"),
+            Patch(facecolor="#e61a1a", label="False alarm: flagged, not burned"),
+        ],
+        loc="lower right", fontsize=9, framealpha=0.9,
+    )
+
+    for ax in axes:
+        ax.axis("off")
+    if title:
+        fig.suptitle(title, fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    return fig
+
+
 def plot_training_curves(history: dict, save_path: str | None = None) -> plt.Figure:
     """Plot training and validation loss/IoU curves."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
@@ -134,6 +180,7 @@ def create_sentinel_overlay(
     bounds: list[list[float]],
     max_size: int = 1024,
     rgb_indices: tuple[int, int, int] = (2, 1, 0),
+    fixed_scale: bool = False,
 ):
     """
     Create a Folium ImageOverlay showing HLS RGB imagery.
@@ -143,12 +190,22 @@ def create_sentinel_overlay(
         bounds: [[south, west], [north, east]] lat/lon bounds
         max_size: downsample so the longer dimension is at most this many pixels
         rgb_indices: which band indices to use for R, G, B (default: B04, B03, B02)
+        fixed_scale: if True, show reflectance 0-0.3 as 0-255 (the same fixed
+            scaling as the Sentinel-2 true-color preview) instead of stretching
+            each channel to its own 2-98 percentiles.
     """
     import folium
 
     r, g, b = rgb_indices
     rgb = np.stack([image[r], image[g], image[b]], axis=-1).astype(np.float32)
-    rgb = _percentile_stretch(rgb)
+    if fixed_scale:
+        from src.model import PRITHVI_MEAN, PRITHVI_STD
+        # Undo the Prithvi z-score to get reflectance back, then scale linearly.
+        mean = np.array([PRITHVI_MEAN[i] for i in (r, g, b)], dtype=np.float32)
+        std = np.array([PRITHVI_STD[i] for i in (r, g, b)], dtype=np.float32)
+        rgb = np.clip((rgb * std + mean) / 0.3, 0, 1)
+    else:
+        rgb = _percentile_stretch(rgb)
     rgb = np.nan_to_num(rgb, nan=0.0)
     rgb_uint8 = (rgb * 255).astype(np.uint8)
 

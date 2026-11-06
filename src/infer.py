@@ -5,7 +5,9 @@ scene, run the model, and return the predicted burn mask + a display image +
 lat/lon bounds.
 
 """
+import json
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -22,7 +24,71 @@ _CONFIG = "configs/train_config.yaml"
 HF_REPO = "evankart/burn-scar-detection-data"
 # Granules are sorted least-cloudy first; a few cover a small AOI and keep the hosted
 # app within Streamlit Cloud memory.
-_MAX_SCENES = 3
+from src.limits import MAX_SCENES as _MAX_SCENES
+
+# --- Runtime estimation -------------------------------------------------------
+# Measured timings from real runs are kept per device type and blended in with an
+# exponential moving average, so estimates get more accurate the more the app is used.
+_TIMING_FILE = Path("data/inference_timing.json")
+# Used until a device has been measured at least once. Deliberately rough.
+_DEFAULT_TIMING = {"sec_per_patch": 1.0, "download_s": 30.0}
+_HLS_PIXEL_M = 30.0
+_PATCH = 224
+# 25% patch overlap (vs 50% before): ~45% fewer patches, small cost at patch edges.
+_STRIDE = 168
+
+
+def _load_timing() -> dict:
+    try:
+        return json.loads(_TIMING_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _record_timing(device_type: str, n_patches: int, infer_s: float, download_s: float | None):
+    """Blend this run's measurements into the stored per-device averages."""
+    try:
+        data = _load_timing()
+        cur = data.get(device_type, {})
+        def blend(key, new):
+            old = cur.get(key)
+            cur[key] = new if old is None else 0.6 * old + 0.4 * new
+        if n_patches > 0:
+            blend("sec_per_patch", infer_s / n_patches)
+        if download_s is not None:
+            blend("download_s", download_s)
+        cur["runs"] = cur.get("runs", 0) + 1
+        data[device_type] = cur
+        _TIMING_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TIMING_FILE.write_text(json.dumps(data, indent=2))
+    except Exception as e:
+        logger.warning("could not record timing: %s", e)
+
+
+def estimate_runtime(bbox: tuple, device) -> dict:
+    """Estimate seconds for download + inference on this AOI and device.
+
+    patches follows the same 50%-overlap tiling used in detect_burn_scar; time is
+    download_s + patches * sec_per_patch using measured averages when available.
+    Returns {patches, seconds, calibrated}.
+    """
+    minlon, minlat, maxlon, maxlat = bbox
+    midlat = math.radians((minlat + maxlat) / 2)
+    w_px = max(_PATCH, (maxlon - minlon) * 111320 * math.cos(midlat) / _HLS_PIXEL_M)
+    h_px = max(_PATCH, (maxlat - minlat) * 110570 / _HLS_PIXEL_M)
+    stride = _STRIDE
+    patches = (math.ceil((w_px - _PATCH) / stride) + 1) * (math.ceil((h_px - _PATCH) / stride) + 1)
+    t = _load_timing().get(getattr(device, "type", str(device)))
+    calibrated = bool(t and t.get("runs"))
+    t = {**_DEFAULT_TIMING, **(t or {})}
+    infer_s = patches * t["sec_per_patch"]
+    return {
+        "patches": patches,
+        "download_s": t["download_s"],
+        "infer_s": infer_s,
+        "seconds": t["download_s"] + infer_s,
+        "calibrated": calibrated,
+    }
 
 
 def load_model(checkpoint: str = "checkpoints/finetune_v3/best_model_inference.pt",
@@ -223,10 +289,14 @@ def fetch_scene(bbox: tuple, post_date: str, cfg, window_days: int = 30) -> dict
 def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
                      window_days: int = 30, patch_size: int = 224,
                      pred_threshold: float | None = None,
-                     prefetched: dict | None = None) -> dict:
+                     prefetched: dict | None = None,
+                     progress=None) -> dict:
     """
     bbox = (min_lon, min_lat, max_lon, max_lat); post_date = 'YYYY-MM-DD'.
     Pass prefetched=fetch_scene(...) to skip the download step.
+    progress, if given, is called as progress(stage, done, total, info) with stage in
+    {"search", "plan", "download", "prepare", "infer"}; done/total count granules for "download"
+    and batches for "infer". info carries extras (e.g. granule sizes in MB).
     Returns {pred_mask (H,W uint8), image (6,H,W normalized), bounds [[S,W],[N,E]],
              burned_frac, scene_date, n_scenes}.
     Raises ValueError if no clear scene is found.
@@ -235,7 +305,12 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     if pred_threshold is None:
         pred_threshold = cfg["data"].get("pred_threshold", 0.5)
 
+    def _emit(stage, done=0, total=0, **info):
+        if progress is not None:
+            progress(stage, done, total, info)
+
     t0 = time.time()
+    download_s = None
     print(f"[detect_burn_scar] start | {mem_note()}", flush=True)
     if prefetched is not None:
         image = prefetched["image"]
@@ -245,6 +320,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         bounds = prefetched["bounds"]
         print("[detect_burn_scar] using prefetched scene", flush=True)
     else:
+        _emit("search")
         dl = HLSDownloader(config_path=_CONFIG)
         end = (datetime.strptime(post_date, "%Y-%m-%d") + timedelta(days=window_days)).strftime("%Y-%m-%d")
         print(f"[detect_burn_scar] searching HLS granules | t={time.time() - t0:.0f}s", flush=True)
@@ -255,12 +331,27 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
         scene_date = _granule_date(granules[0])
         n_scenes = len(granules)
         print(f"[detect_burn_scar] downloading/merging {n_scenes} granule(s) | t={time.time() - t0:.0f}s", flush=True)
-        post_ds = dl.load_and_merge_scenes(granules, tuple(bbox), max_scenes=_MAX_SCENES)
+        n_dl = min(n_scenes, _MAX_SCENES)
+        _emit("plan", 0, n_dl)
+        planned_bytes = dl.plan_download_bytes(
+            granules, tuple(bbox), max_scenes=_MAX_SCENES,
+            on_progress=lambda done, total: _emit("plan", done, total),
+        )
+        print(f"[detect_burn_scar] planned download: {planned_bytes} bytes", flush=True)
+        _emit("download", 0, n_dl, planned_bytes=planned_bytes)
+        t_dl = time.time()
+        post_ds = dl.load_and_merge_scenes(
+            granules, tuple(bbox), max_scenes=_MAX_SCENES,
+            on_granule=lambda done, total: _emit("download", done, total,
+                                                  planned_bytes=planned_bytes),
+        )
+        download_s = time.time() - t_dl
         print("[detect_burn_scar] scene loaded, normalizing bands", flush=True)
         image = normalize_bands(post_ds, bands)
         bounds = _bounds_latlon(post_ds)
         print(f"[detect_burn_scar] scene ready, shape={image.shape} | t={time.time() - t0:.0f}s", flush=True)
 
+    _emit("prepare")
     _, h, w = image.shape
 
     # Build pre-inference cloud/water mask on the original (unpadded) scene.
@@ -282,7 +373,7 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     valid_px &= ~pre_cloud
 
     acc = np.zeros((H, W), np.float32); cnt = np.zeros((H, W), np.float32)
-    stride = patch_size // 2
+    stride = max(1, patch_size * 3 // 4) if patch_size == _PATCH else patch_size // 2
     ys = list(range(0, H - patch_size + 1, stride)) or [0]
     xs = list(range(0, W - patch_size + 1, stride)) or [0]
     if ys[-1] != H - patch_size: ys.append(H - patch_size)
@@ -295,7 +386,13 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
     ]
     print(f"[detect_burn_scar] scene {H}x{W}, running {len(positions)} patch(es) through model", flush=True)
     batch_size = 16
-    with torch.inference_mode():
+    n_batches = (len(positions) + batch_size - 1) // batch_size
+    _emit("infer", 0, n_batches)
+    t_inf = time.time()
+    # Half precision on GPU backends (CUDA/MPS); CPU stays fp32 since bf16 is often slower there.
+    use_amp = device.type in ("cuda", "mps")
+    amp = torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp)
+    with torch.inference_mode(), amp:
         for i in range(0, len(positions), batch_size):
             batch = positions[i:i + batch_size]
             patches = np.stack([
@@ -303,13 +400,16 @@ def detect_burn_scar(bbox: tuple, post_date: str, model, device, cfg,
                 for y, x in batch
             ])
             tensors = torch.from_numpy(patches).float().to(device)
-            batch_probs = torch.softmax(model(tensors), dim=1)[:, 1].cpu().numpy()
+            batch_probs = torch.softmax(model(tensors).float(), dim=1)[:, 1].cpu().numpy()
             for (y, x), probs in zip(batch, batch_probs):
                 pv = valid_px[y:y + patch_size, x:x + patch_size]
                 acc[y:y + patch_size, x:x + patch_size][pv] += probs[pv]
                 cnt[y:y + patch_size, x:x + patch_size][pv] += 1
-            print(f"[detect_burn_scar] batch {i // batch_size + 1}/{(len(positions) + batch_size - 1) // batch_size} done | t={time.time() - t0:.0f}s | {mem_note()}", flush=True)
+            _emit("infer", i // batch_size + 1, n_batches)
+            print(f"[detect_burn_scar] batch {i // batch_size + 1}/{n_batches} done | t={time.time() - t0:.0f}s | {mem_note()}", flush=True)
 
+    _record_timing(getattr(device, "type", str(device)), len(positions),
+                   time.time() - t_inf, download_s)
     print(f"[detect_burn_scar] patch loop complete | t={time.time() - t0:.0f}s", flush=True)
     covered = cnt > 0
     prob = np.zeros((H, W), np.float32)

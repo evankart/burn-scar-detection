@@ -25,7 +25,7 @@ These four fires are held out of training entirely. The decision threshold (0.5)
 ```
 HLS (6 bands, 30m) → z-score normalize → Prithvi-EO-2.0 ViT encoder → FPN decoder → burn mask
                      (2.0 pretrain stats)  (300M params, fine-tuned;    (3.8M params,
-                                            pretrained on ~640k HLS)     trained from scratch)
+                                            pretrained on 4.2M HLS)     trained from scratch)
 ```
 
 - **Encoder** — [Prithvi-EO-2.0-300M](https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M), a ViT-Large pretrained by IBM/NASA on HLS. Fine-tuned end-to-end with LLRD; multi-scale features tapped from encoder blocks `[5, 11, 17, 23]`.

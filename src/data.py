@@ -5,6 +5,7 @@ Uses NASA Earthdata's Harmonized Landsat Sentinel-2 (HLS) product (same as data 
 """
 
 import logging
+import os
 import platform
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,6 +20,47 @@ from shapely.geometry import box, mapping
 from torch.utils.data import Dataset, DataLoader
 
 logger = logging.getLogger(__name__)
+
+
+def _netrc_has_earthdata() -> bool:
+    """True if the user's existing ~/.netrc has an Earthdata login entry (read-only check)."""
+    try:
+        with open(os.path.join(os.path.expanduser("~"), ".netrc")) as fh:
+            return "urs.earthdata.nasa.gov" in fh.read()
+    except OSError:
+        return False
+
+
+def configure_gdal_http() -> bool:
+    """Let GDAL read NASA Earthdata files itself, with HTTP range requests.
+
+    Why: opening a remote file through rasterio as a Python file object makes rasterio copy
+    the entire file into memory (one full read()), so a tiny AOI still downloaded ~27 MB per
+    band. Opening "/vsicurl/<url>" instead fetches only the tiles it needs (measured: 0.15 MB
+    instead of 27 MB for the same window).
+
+    GDAL authenticates with the user's existing ~/.netrc. This function never writes
+    credentials anywhere. If there is no Earthdata netrc entry it returns False and the
+    loader keeps using the slower earthaccess file objects."""
+    if not _netrc_has_earthdata():
+        return False
+    cookie = os.path.join(os.path.expanduser("~"), ".urs_cookies")
+    for key, val in {
+        "GDAL_HTTP_COOKIEFILE": cookie,
+        "GDAL_HTTP_COOKIEJAR": cookie,
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif",
+        "GDAL_HTTP_MAX_RETRY": "3",
+        "GDAL_HTTP_RETRY_DELAY": "1",
+    }.items():
+        os.environ.setdefault(key, val)
+    return True
+
+
+USE_VSICURL = configure_gdal_http()
+
+
+
 
 HLS_COLLECTION = "HLSS30.v2.0"
 
@@ -125,19 +167,73 @@ class HLSDownloader:
         da = da.rio.clip_box(*bbox, crs="EPSG:4326")
         return da.rio.clip([mapping(box(*bbox))], crs="EPSG:4326")
 
+    @staticmethod
+    def _asset_urls(granule) -> dict:
+        """{'B02': url, ..., 'Fmask': url} for the granule's GeoTIFF assets."""
+        try:
+            links = granule.data_links(access="external")
+        except Exception:
+            return {}
+        out = {}
+        for u in links:
+            if u.endswith(".tif"):
+                out[u.rsplit(".", 2)[-2]] = u
+        return out
+
+    def _open_raster(self, granule, name: str, mask_and_scale: bool, files: list | None = None,
+                     use_vsicurl: bool = True):
+        """Open one asset lazily. Prefers GDAL range reads via /vsicurl/ (fetches only the
+        tiles under the AOI); falls back to the fsspec file object, which downloads the
+        whole file, if that is unavailable or fails."""
+        url = self._asset_urls(granule).get(name) if (USE_VSICURL and use_vsicurl) else None
+        if url:
+            try:
+                return rioxarray.open_rasterio("/vsicurl/" + url, mask_and_scale=mask_and_scale)
+            except Exception as e:
+                logger.warning(f"vsicurl open of {name} failed ({type(e).__name__}: {e}); "
+                               "falling back to full-file read")
+        files = files if files is not None else self._open_needed(granule)
+        matched = [f for f in files if f.path.endswith(f".{name}.tif")]
+        if not matched:
+            raise ValueError(f"{name} not found in granule assets")
+        return rioxarray.open_rasterio(matched[0], mask_and_scale=mask_and_scale)
+
+    def _open_needed(self, granule) -> list:
+        """Open only the files we read (the 6 bands and the Fmask) instead of every file
+        in the granule (18). Fewer opens, less latency."""
+        def wanted(url: str) -> bool:
+            return url.endswith(".Fmask.tif") or any(url.endswith(f".{b}.tif") for b in self.bands)
+        try:
+            urls = [u for u in granule.data_links(access="external") if wanted(u)]
+        except Exception:
+            urls = []
+        return earthaccess.open(urls) if urls else earthaccess.open([granule])
+
     def load_scene(self, granule, bbox: tuple, files: list | None = None) -> xr.Dataset:
-        band_arrays = {}
-        if files is None:
-            files = earthaccess.open([granule])
+        """Read every band's AOI window. The band files are independent remote files and
+        loading is dominated by per-request latency, so they are read in parallel."""
+        from concurrent.futures import ThreadPoolExecutor
 
-        for band in self.bands:
-            matched = [f for f in files if f.path.endswith(f".{band}.tif")]
-            if not matched:
-                raise ValueError(f"Band {band} not found in granule assets")
+        if files is None and not USE_VSICURL:
+            files = self._open_needed(granule)
 
-            da = rioxarray.open_rasterio(matched[0], mask_and_scale=True)
-            da = self._clip_to_bbox(da, bbox)
-            band_arrays[band] = da.squeeze("band", drop=True)
+        def read_band(band: str):
+            def read(use_vsicurl: bool):
+                da = self._open_raster(granule, band, True, files, use_vsicurl=use_vsicurl)
+                da = self._clip_to_bbox(da, bbox).squeeze("band", drop=True)
+                da.load()
+                return da
+            try:
+                return band, read(True)
+            except Exception as e:
+                if not USE_VSICURL:
+                    raise
+                logger.warning(f"Range read of {band} failed ({type(e).__name__}: {e}); "
+                               "retrying with a full-file read")
+                return band, read(False)
+
+        with ThreadPoolExecutor(max_workers=len(self.bands)) as ex:
+            band_arrays = dict(ex.map(read_band, self.bands))
 
         ref_band = band_arrays[self.bands[0]]
         for band_name, da in band_arrays.items():
@@ -155,7 +251,7 @@ class HLSDownloader:
         Bit flags: 1=cirrus, 2=cloud, 8=cloud shadow, 16=snow, 32=water.
         """
         try:
-            files = earthaccess.open([granule])
+            files = self._open_needed(granule)
             matched = [f for f in files if f.path.endswith(".Fmask.tif")]
             if not matched:
                 return None
@@ -173,19 +269,24 @@ class HLSDownloader:
         """Fmask QA band as a DataArray reprojected onto ref_da's grid (nearest),
         so it aligns pixel-for-pixel with the loaded spectral bands. None if absent."""
         from rasterio.enums import Resampling
-        try:
-            if files is None:
-                files = earthaccess.open([granule])
-            matched = [f for f in files if f.path.endswith(".Fmask.tif")]
-            if not matched:
-                return None
-            da = rioxarray.open_rasterio(matched[0], mask_and_scale=False)
-            da = self._clip_to_bbox(da, bbox)
-            da = da.squeeze("band", drop=True)
+
+        def read(use_vsicurl: bool):
+            da = self._open_raster(granule, "Fmask", False, files, use_vsicurl=use_vsicurl)
+            da = self._clip_to_bbox(da, bbox).squeeze("band", drop=True)
             if da.shape != ref_da.shape:
                 da = da.rio.reproject_match(ref_da, resampling=Resampling.nearest)
             da.load()
             return da
+
+        if files is None and not USE_VSICURL:
+            files = self._open_needed(granule)
+        try:
+            try:
+                return read(True)
+            except Exception:
+                if not USE_VSICURL:
+                    raise
+                return read(False)
         except Exception as e:
             logger.warning(f"Could not load Fmask for masking: {e}")
             return None
@@ -228,15 +329,89 @@ class HLSDownloader:
             except Exception:
                 pass
 
+    def plan_download_bytes(self, granules: list, bbox: tuple, max_scenes: int = 10,
+                            on_progress=None) -> int | None:
+        """Expected bytes to fetch for this AOI.
+
+        With GDAL range reads (USE_VSICURL) only the tiles under the AOI are fetched, and
+        every file stores each tile's compressed size, so the total is the sum of those
+        sizes over the 6 bands and the Fmask. Only file headers are read to work it out.
+        Without range reads, whole files are fetched, so the total is the sum of file sizes
+        (from a 1-byte ranged GET). Returns None on failure; the caller then shows bytes
+        received without a total.
+
+        on_progress(done, total) reports at the start and when the plan is ready."""
+        import math
+        from concurrent.futures import ThreadPoolExecutor
+
+        todo = granules[:max_scenes]
+
+        def wanted(name: str) -> bool:
+            return name == "Fmask" or name in self.bands
+
+        try:
+            if on_progress:
+                on_progress(0, len(todo))
+            urls = [u for g in todo for n, u in self._asset_urls(g).items() if wanted(n)]
+            if not urls:
+                return None
+
+            if USE_VSICURL:
+                import rasterio
+                from rasterio.warp import transform_bounds
+                from rasterio.windows import from_bounds
+
+                def tile_bytes(url: str) -> int:
+                    with rasterio.open("/vsicurl/" + url) as ds:
+                        l, b, r, t = transform_bounds("EPSG:4326", ds.crs, *bbox, densify_pts=21)
+                        win = from_bounds(l, b, r, t, transform=ds.transform)
+                        c0 = max(int(math.floor(win.col_off)), 0)
+                        r0 = max(int(math.floor(win.row_off)), 0)
+                        c1 = min(int(math.ceil(win.col_off + win.width)), ds.width)
+                        r1 = min(int(math.ceil(win.row_off + win.height)), ds.height)
+                        if c1 <= c0 or r1 <= r0:
+                            return 0
+                        by, bx = ds.block_shapes[0]
+                        total = 0
+                        for yb in range(r0 // by, (r1 - 1) // by + 1):
+                            for xb in range(c0 // bx, (c1 - 1) // bx + 1):
+                                sz = ds.get_tag_item(f"BLOCK_SIZE_{xb}_{yb}", "TIFF", bidx=1)
+                                total += int(sz) if sz else bx * by * 2
+                        return total
+                measure = tile_bytes
+            else:
+                session = earthaccess.get_requests_https_session()
+
+                def file_bytes(url: str) -> int:
+                    r = session.get(url, headers={"Range": "bytes=0-0"}, stream=True,
+                                    allow_redirects=True, timeout=30)
+                    try:
+                        return int(r.headers["Content-Range"].rsplit("/", 1)[1])
+                    finally:
+                        r.close()
+                measure = file_bytes
+
+            with ThreadPoolExecutor(8) as ex:
+                total = sum(ex.map(measure, urls))
+        except Exception as e:
+            logger.warning(f"Could not plan download size: {type(e).__name__}: {e}")
+            return None
+        if on_progress:
+            on_progress(len(todo), len(todo))
+        return total
+
     def load_and_merge_scenes(self, granules: list, bbox: tuple, max_scenes: int = 10,
-                              apply_fmask: bool = True) -> xr.Dataset:
+                              apply_fmask: bool = True, on_granule=None) -> xr.Dataset:
         """Mosaic up to max_scenes onto a fixed UTM grid spanning the bbox via
         rioxarray.merge (each scene placed at its true position; least-cloudy
         first, nodata gaps filled from later scenes).
 
         With apply_fmask=True, each granule's cloud / cloud-shadow / snow pixels
         (per its HLS Fmask QA band, FMASK_BAD_BITS) are set to NaN before merge,
-        so clean pixels from other scenes fill those gaps in the mosaic."""
+        so clean pixels from other scenes fill those gaps in the mosaic.
+
+        on_granule, if given, is called as on_granule(done, total) before each
+        granule starts and once more when all have finished."""
         import gc
         from rioxarray.merge import merge_arrays
         from src.utils import mem_note
@@ -250,28 +425,32 @@ class HLSDownloader:
         loaded = 0
         masked_px_total = 0
         last_err = None
-        for granule in granules[:max_scenes]:
+        todo = granules[:max_scenes]
+
+        def load_granule(granule):
+            """Load one granule's bands (and Fmask), returning arrays ready to merge, or
+            (None, err) if it fails. Runs in a worker thread."""
             granule_id = granule.get("meta", {}).get("native-id", "unknown")
             print(f"[merge] loading {granule_id} | {mem_note()}", flush=True)
             files = None
             try:
-                files = earthaccess.open([granule])
+                files = None if USE_VSICURL else self._open_needed(granule)
                 ds = self.load_scene(granule, bbox, files=files)
-                print(f"[merge] scene loaded | {mem_note()}", flush=True)
+                print(f"[merge] scene loaded {granule_id} | {mem_note()}", flush=True)
             except Exception as e:
-                last_err = e
                 logger.warning(f"Skipping scene {granule_id}: {type(e).__name__}: {e}")
                 self._close_files(files)
-                continue
+                return None, e
+            masked = 0
+            bad_da = None
             if apply_fmask:
                 fmask_da = self._load_fmask_da(granule, bbox, ds[self.bands[0]], files=files)
                 if fmask_da is not None:
                     bad = (fmask_da.values.astype(np.uint8) & FMASK_BAD_BITS) != 0
                     if bad.any():
-                        masked_px_total += int(bad.sum())
+                        masked = int(bad.sum())
                         for band in self.bands:
                             ds[band].values[bad] = np.nan
-                    # Accumulate Fmask bad-pixel map for saving to the cache.
                     bad_da = xr.DataArray(
                         bad.astype(np.float32), dims=fmask_da.dims, coords=fmask_da.coords
                     )
@@ -281,16 +460,44 @@ class HLSDownloader:
                     if bad_da.rio.crs is not None and bad_da.rio.crs != target_crs:
                         from rasterio.enums import Resampling as _Res
                         bad_da = bad_da.rio.reproject(target_crs, resampling=_Res.max)
-                    per_fmask.append(bad_da)
+            bands_out = {}
             for band in self.bands:
                 da = ds[band].rio.write_nodata(np.nan)
                 if da.rio.crs is not None and da.rio.crs != target_crs:
                     da = da.rio.reproject(target_crs)
-                per_band[band].append(da)
+                bands_out[band] = da
             self._close_files(files)
-            loaded += 1
             del ds
             gc.collect()
+            return (bands_out, bad_da, masked), None
+
+        # A few granules at a time: enough to hide request latency, few enough to bound memory.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        n_total = len(todo)
+        if on_granule:
+            on_granule(0, n_total)
+        results = [None] * n_total
+        with ThreadPoolExecutor(max_workers=min(3, max(n_total, 1))) as ex:
+            futures = {ex.submit(load_granule, g): i for i, g in enumerate(todo)}
+            finished = 0
+            for fut in as_completed(futures):
+                results[futures[fut]] = fut.result()
+                finished += 1
+                if on_granule:
+                    on_granule(finished, n_total)
+
+        # Merge in the original order (least cloudy first), not completion order.
+        for res, err in results:
+            if res is None:
+                last_err = err
+                continue
+            bands_out, bad_da, masked = res
+            masked_px_total += masked
+            if bad_da is not None:
+                per_fmask.append(bad_da)
+            for band in self.bands:
+                per_band[band].append(bands_out[band])
+            loaded += 1
 
         if loaded == 0:
             msg = "No scenes could be loaded"
