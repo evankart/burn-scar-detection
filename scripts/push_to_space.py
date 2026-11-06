@@ -23,6 +23,8 @@ uploads = [
     ("src/app/__init__.py", "src/app/__init__.py"),
     ("src/app/streamlit_app.py", "src/app/streamlit_app.py"),
     ("configs/train_config.yaml", "configs/train_config.yaml"),
+    # light theme; without it the Space follows the visitor's dark/light setting
+    (".streamlit/config.toml", ".streamlit/config.toml"),
     # official CAL FIRE perimeters shown on the test-fire map
     ("assets/perimeters/woolsey_fire_2018.geojson", "assets/perimeters/woolsey_fire_2018.geojson"),
     ("assets/perimeters/thomas_fire_2017.geojson", "assets/perimeters/thomas_fire_2017.geojson"),

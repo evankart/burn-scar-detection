@@ -321,14 +321,19 @@ def _fit_map_to_window(bounds=None):
     script = """
         <script>
         const BOUNDS = __BOUNDS__;
+        // On Hugging Face the whole app sits inside another iframe that grows to fit its
+        // content. Sizing the map from this window's height then feeds back on itself
+        // (taller map -> taller frame -> taller map...), so cap it by the physical screen.
+        const embedded = (() => { try { return window.parent.parent !== window.parent; } catch (e) { return true; } })();
         const fit = () => {
           const pw = window.parent;
+          const winH = embedded ? Math.min(pw.innerHeight, screen.availHeight - 170) : pw.innerHeight;
           pw.document.querySelectorAll('iframe').forEach(f => {
             try {
               const d = f.contentDocument;
               const m = d && (d.getElementById('map_div') || d.querySelector('.folium-map'));
               if (!m) return;
-              const h = Math.max(300, pw.innerHeight - f.getBoundingClientRect().top - 12);
+              const h = Math.max(300, winH - f.getBoundingClientRect().top - 12);
               f.style.height = h + 'px';
               m.style.height = h + 'px';
               d.documentElement.style.height = h + 'px';
@@ -789,9 +794,7 @@ def custom_detection_view(sidebar_slot):
             from src.infer import estimate_runtime
             from src.utils import get_device
             est = estimate_runtime(bbox, get_device())
-            note = "" if est["calibrated"] else "  \n(rough: not yet measured on this machine)"
-            st.caption(f"Estimated run time: **about {_fmt_seconds(est['seconds'])}**  \n"
-                       f"Model patches: **{est['patches']}**{note}")
+            st.caption(f"Estimated run time: **about {_fmt_seconds(est['seconds'])}**")
             if st.button("Run burn scar detection", type="primary", use_container_width=True):
                 try:
                     res = _run_with_progress(*rounded, est)
